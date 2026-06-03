@@ -102,6 +102,19 @@ def test_advance_exception_resets_inflight(gated, monkeypatch):
     assert db.active_candidate("main") is not None   # still frozen, retryable
 
 
+def test_advance_refuses_poisoned_candidate(gated):
+    """Poison set between freeze and advance must survive; candidate dies."""
+    from quilt import resolve
+    r, db, cfg = gated
+    out = candidate.freeze(r.path, db, cfg)
+    resolve.poison_merge_point(r.path, db, out["merge_point"])
+    assert candidate.advance(r.path, db, cfg) is False
+    mp = db.get_merge_point(out["merge_point"])
+    assert mp["validation_state"] == "poison"        # never overwritten
+    assert gitio.read_ref(r.path, "refs/quilt/target/main") is None
+    assert db.active_candidate("main") is None       # failed, new freeze possible
+
+
 def test_freeze_advance_cli(gated, tmp_path, capsys):
     from quilt import cli
     r, db, cfg = gated

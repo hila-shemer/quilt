@@ -44,6 +44,9 @@ def advance(repo: Path, db, cfg) -> bool | None:
     if not cand:
         return None
     mp = db.get_merge_point(cand["mp_id"])
+    if mp["validation_state"] == "poison":
+        db.set_candidate_state(cand["id"], "failed")
+        return False
     db.set_validation(mp["id"], "inflight")
     try:
         with tempfile.TemporaryDirectory() as wt:
