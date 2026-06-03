@@ -76,6 +76,13 @@ where the merged result is checked out.
 | `quilt status` | Show each merge-point and its highest passing gate. |
 | `quilt queue` | Show pending work items (conflicts, test failures). |
 | `quilt promote <target>` | Promote the best ready candidate to `refs/quilt/target/<target>`. |
+| `quilt poison <prefix>` | Mark a merge-point poisoned and cascade-evict all supersets. |
+| `quilt triage` | Classify queued work via the cheap model; route trivial/moderate → agent, complex → deferred. |
+| `quilt resolve` | Run the capable agent on triaged conflicts; pins `refs/quilt/<id>` (`agent`/`frankenmerge`). |
+| `quilt diagnose` | Attribute triaged test failures to a resolution (→ poison + cascade) or a member branch. |
+| `quilt freeze` | Freeze the best candidate that cleared `[promotion].candidate_gate` to `refs/quilt/candidate/<target>`. |
+| `quilt advance` | Run `[promotion].final_cmd` on the frozen candidate; on pass advance `refs/quilt/target/<target>`. |
+| `quilt backprop [--out DIR]` | Export pending frankenmerge glue as patches; detect adoption by patch-id. |
 
 All commands accept `--repo <path>` (default: `.`) and `--config <path>`
 (default: `quilt.toml`).
@@ -88,6 +95,42 @@ All commands accept `--repo <path>` (default: `.`) and `--config <path>`
 - Moving the base forward (e.g. after merging a previous round) re-runs only
   gates whose results are missing for the new base; it does not clear passing
   results from older bases.
+
+### LLM agents (off the happy path)
+
+Agents are shell commands configured in `quilt.toml` — the prompt arrives on
+stdin; triage/diagnose answer with a JSON object on stdout, resolve edits the
+conflicted worktree it is started in:
+
+```toml
+[llm]
+triage_cmd   = "claude -p --model claude-haiku-4-5"
+resolve_cmd  = "claude -p --permission-mode acceptEdits"
+diagnose_cmd = "claude -p"
+```
+
+The agent loop: `quilt tick` (deterministic; fills the queue) → `quilt triage`
+(cheap model routes) → `quilt resolve` / `quilt diagnose` (capable model) →
+`quilt tick` again (gates the new resolutions).
+
+Mark a long-running gate with `long = true` to track
+`untested → inflight → validated` on merge-points that pass it.
+
+### Promotion loop
+
+```toml
+[promotion]
+target = "main"
+candidate_gate = "t4h"    # ladder rung required to freeze a candidate
+final_gate = "t4day"      # recorded gate name for the stress run
+final_cmd = "make stress -C {workdir}"
+```
+
+`quilt freeze` pins the largest qualifying merge-point to a frozen candidate
+ref; `quilt advance` stress-tests exactly that frozen commit and only then
+moves `refs/quilt/target/main`. Agent-authored glue commits (frankenmerges)
+are tracked in `frankenmerge_fix` and driven `pending → offered → adopted` by
+`quilt backprop`.
 
 ## Reference
 
