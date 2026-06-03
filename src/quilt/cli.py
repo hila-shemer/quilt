@@ -79,8 +79,7 @@ def main(argv=None):
                   + ", ".join(m[:12] for m in matches))
             sys.exit(1)
         full_id = matches[0]
-        cascade_ids = db.set_validation(full_id, "poison")
-        resolve.evict(repo, db, cascade_ids)
+        cascade_ids = resolve.poison_merge_point(repo, db, full_id)
         print(f"poisoned {full_id}, evicted {len(cascade_ids)} dependents")
 
 

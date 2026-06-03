@@ -25,6 +25,14 @@ def reusable_resolution(repo: Path, db, mp_id: str) -> str | None:
     return gitio.read_ref(repo, f"refs/quilt/{mp_id}")
 
 
+def poison_merge_point(repo: Path, db, mp_id: str) -> list[str]:
+    """Poison a merge-point and evict refs of cascade-reset supersets.
+    Shared by the poison CLI and test-failure diagnosis."""
+    cascade_ids = db.set_validation(mp_id, "poison")
+    evict(repo, db, cascade_ids)
+    return cascade_ids
+
+
 def try_mediate(repo: Path, db, mp_id: str) -> str | None:
     """Try resolving a conflicted merge-point with git-mediate in a temp
     worktree. Returns merge commit SHA, or None (queues agent work)."""

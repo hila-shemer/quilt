@@ -66,3 +66,15 @@ def test_evict_removes_superset_ref_and_leaves_poisoned_ref_intact(repo_with_bra
     # poisoned point's own ref still exists (but reusable_resolution still None due to poison)
     assert gitio.read_ref(repo_with_branches.path, f"refs/quilt/{solo_id}") is not None
     assert resolve.reusable_resolution(repo_with_branches.path, db, solo_id) is None
+
+
+def test_poison_merge_point_evicts_supersets(repo_with_branches, db):
+    r = repo_with_branches
+    results = probe.probe_all(r.path, "main", ["feat-clean", "feat-conflict"], db)
+    by_n = sorted(results, key=lambda x: len(x["branches"]))
+    single, pair = by_n[0]["id"], by_n[-1]["id"]
+    assert gitio.read_ref(r.path, f"refs/quilt/{pair}")
+    cascade = resolve.poison_merge_point(r.path, db, single)
+    assert pair in cascade
+    assert db.get_merge_point(single)["validation_state"] == "poison"
+    assert gitio.read_ref(r.path, f"refs/quilt/{pair}") is None
