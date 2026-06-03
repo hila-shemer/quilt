@@ -99,3 +99,48 @@ def test_run_ladder_skips_worktree_when_all_cached(repo_with_branches, db, cfg, 
     result = gates.run_ladder(repo_with_branches.path, db, cfg, mp["id"])
     assert result == "fast_tests"
     assert worktree_calls == [], "worktree should not be created when all gates are cached"
+
+
+CFG_FULL = """
+[quilt]
+base = "main"
+branches = ["feat-clean"]
+
+[[gate]]
+name = "compiles"
+cmd = "test -f base.txt"
+
+[[gate]]
+name = "t4h"
+cmd = "test -f feature.txt"
+long = true
+
+[targets]
+local-stable = "t4h"
+
+[llm]
+triage_cmd = "/usr/bin/true"
+resolve_cmd = "/usr/bin/true"
+
+[promotion]
+target = "main"
+candidate_gate = "t4h"
+final_gate = "t4day"
+final_cmd = "test -f base.txt"
+"""
+
+
+def test_config_llm_and_promotion(tmp_path):
+    p = tmp_path / "full.toml"
+    p.write_text(CFG_FULL)
+    c = gates.load_config(p)
+    assert c.llm["triage_cmd"] == "/usr/bin/true"
+    assert c.promotion["target"] == "main"
+    assert c.promotion["final_gate"] == "t4day"
+    assert c.gates[1].get("long") is True
+    assert c.gates[0].get("long") is None
+
+
+def test_config_llm_promotion_default_empty(cfg):
+    assert cfg.llm == {}
+    assert cfg.promotion == {}

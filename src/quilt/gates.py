@@ -3,7 +3,7 @@ absence of a row for the current base)."""
 import subprocess
 import tempfile
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import gitio
@@ -13,8 +13,10 @@ from . import gitio
 class Config:
     base: str
     branches: list[str]
-    gates: list[dict]          # [{name, cmd}]
+    gates: list[dict]          # [{name, cmd, long?}]
     targets: dict[str, str]    # target -> required gate
+    llm: dict[str, str] = field(default_factory=dict)        # triage_cmd | resolve_cmd | diagnose_cmd
+    promotion: dict = field(default_factory=dict)            # target, candidate_gate, final_gate, final_cmd
 
     @property
     def ladder(self):
@@ -24,7 +26,8 @@ class Config:
 def load_config(path: Path) -> Config:
     raw = tomllib.loads(Path(path).read_text())
     return Config(base=raw["quilt"]["base"], branches=raw["quilt"]["branches"],
-                  gates=raw.get("gate", []), targets=raw.get("targets", {}))
+                  gates=raw.get("gate", []), targets=raw.get("targets", {}),
+                  llm=raw.get("llm", {}), promotion=raw.get("promotion", {}))
 
 
 def run_ladder(repo: Path, db, cfg: Config, mp_id: str) -> str | None:
