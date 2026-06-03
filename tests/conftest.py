@@ -3,6 +3,14 @@ from pathlib import Path
 import pytest
 
 
+def make_stub(dirpath: Path, name: str, script: str) -> Path:
+    """Write an executable stub script standing in for an LLM command."""
+    p = dirpath / name
+    p.write_text(script)
+    p.chmod(0o755)
+    return p
+
+
 class Repo:
     """Wraps a real git repo for tests."""
     def __init__(self, path: Path):
