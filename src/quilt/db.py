@@ -49,7 +49,15 @@ CREATE TABLE IF NOT EXISTS work_queue (
   kind       TEXT NOT NULL,         -- conflict | test_fail
   target_id  TEXT NOT NULL,
   detail     TEXT,
-  state      TEXT NOT NULL DEFAULT 'queued',  -- queued | done | dropped
+  state      TEXT NOT NULL DEFAULT 'queued',  -- queued | triaged | deferred | done | dropped
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS candidate (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  target     TEXT NOT NULL,
+  mp_id      TEXT NOT NULL REFERENCES merge_point(id),
+  commit_sha TEXT NOT NULL,
+  state      TEXT NOT NULL DEFAULT 'frozen',  -- frozen | promoted | failed
   created_at INTEGER NOT NULL
 );
 """
@@ -159,3 +167,77 @@ class DB:
     def pending_work(self):
         return [dict(r) for r in self.conn.execute(
             "SELECT * FROM work_queue WHERE state='queued' ORDER BY id")]
+
+    def set_work_state(self, work_id, state):
+        self.conn.execute("UPDATE work_queue SET state=? WHERE id=?",
+                          (state, work_id))
+        self.conn.commit()
+
+    def work_by_state(self, state, kind=None):
+        q, args = "SELECT * FROM work_queue WHERE state=?", [state]
+        if kind:
+            q += " AND kind=?"
+            args.append(kind)
+        return [dict(r) for r in self.conn.execute(q + " ORDER BY id", args)]
+
+    def record_triage(self, id, target_id, kind, est_cause, effort_class,
+                      model=None):
+        self.conn.execute(
+            """INSERT INTO triage (id, target_id, kind, est_cause, effort_class,
+                 model, created_at) VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET est_cause=excluded.est_cause,
+                 effort_class=excluded.effort_class, model=excluded.model""",
+            (id, target_id, kind, est_cause, effort_class, model,
+             int(time.time())))
+        self.conn.commit()
+
+    def get_triage(self, id):
+        row = self.conn.execute("SELECT * FROM triage WHERE id=?",
+                                (id,)).fetchone()
+        return dict(row) if row else None
+
+    def add_fix(self, mp_id, patch_ref, affected_tips):
+        cur = self.conn.execute(
+            """INSERT INTO frankenmerge_fix
+                 (merge_point_id, patch_ref, affected_tips, backprop_state)
+               VALUES (?,?,?,'pending')""",
+            (mp_id, patch_ref, json.dumps(affected_tips)))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def list_fixes(self, state=None):
+        q, args = "SELECT rowid AS id, * FROM frankenmerge_fix", ()
+        if state:
+            q += " WHERE backprop_state=?"
+            args = (state,)
+        out = []
+        for r in self.conn.execute(q, args):
+            d = dict(r)
+            d["affected_tips"] = json.loads(d["affected_tips"])
+            out.append(d)
+        return out
+
+    def set_fix_state(self, fix_id, state):
+        self.conn.execute(
+            "UPDATE frankenmerge_fix SET backprop_state=? WHERE rowid=?",
+            (state, fix_id))
+        self.conn.commit()
+
+    def add_candidate(self, target, mp_id, commit_sha):
+        cur = self.conn.execute(
+            """INSERT INTO candidate (target, mp_id, commit_sha, created_at)
+               VALUES (?,?,?,?)""",
+            (target, mp_id, commit_sha, int(time.time())))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def active_candidate(self, target):
+        row = self.conn.execute(
+            """SELECT * FROM candidate WHERE target=? AND state='frozen'
+               ORDER BY id DESC LIMIT 1""", (target,)).fetchone()
+        return dict(row) if row else None
+
+    def set_candidate_state(self, cand_id, state):
+        self.conn.execute("UPDATE candidate SET state=? WHERE id=?",
+                          (state, cand_id))
+        self.conn.commit()

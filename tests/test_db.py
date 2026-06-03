@@ -46,3 +46,59 @@ def test_poison_cascades_to_supersets(db):
     assert db.get_merge_point("ab")["validation_state"] == "untested"   # reset
     assert db.get_merge_point("b")["validation_state"] == "untested"    # untouched
     assert db.get_merge_point("a")["validation_state"] == "poison"
+
+
+def _mp(db, id_="mp1", members=("p1",)):
+    db.upsert_merge_point(id=id_, base_tree_sha="t", base_commit_sha="c",
+                          member_patch_ids=list(members), member_tips=list(members),
+                          construction="clean")
+
+
+def test_work_state_transitions(db):
+    _mp(db)
+    db.enqueue_work("conflict", "mp1", "boom")
+    item = db.pending_work()[0]
+    db.set_work_state(item["id"], "triaged")
+    assert db.pending_work() == []
+    assert db.work_by_state("triaged")[0]["id"] == item["id"]
+
+
+def test_work_by_state_filters_kind(db):
+    _mp(db)
+    db.enqueue_work("conflict", "mp1")
+    db.enqueue_work("test_fail", "mp1")
+    for item in db.pending_work():
+        db.set_work_state(item["id"], "triaged")
+    assert len(db.work_by_state("triaged")) == 2
+    assert len(db.work_by_state("triaged", kind="conflict")) == 1
+
+
+def test_triage_roundtrip(db):
+    db.record_triage("1", "mp1", "conflict", "rename collision", "moderate",
+                     model="stub")
+    row = db.get_triage("1")
+    assert row["effort_class"] == "moderate"
+    assert row["est_cause"] == "rename collision"
+    assert db.get_triage("missing") is None
+
+
+def test_fix_roundtrip(db):
+    _mp(db)
+    fix_id = db.add_fix("mp1", "refs/quilt/fix/mp1", ["tip1", "tip2"])
+    [fix] = db.list_fixes(state="pending")
+    assert fix["id"] == fix_id
+    assert fix["affected_tips"] == ["tip1", "tip2"]
+    db.set_fix_state(fix_id, "offered")
+    assert db.list_fixes(state="pending") == []
+    assert db.list_fixes(state="offered")[0]["backprop_state"] == "offered"
+
+
+def test_candidate_roundtrip(db):
+    _mp(db)
+    cand_id = db.add_candidate("main", "mp1", "deadbeef")
+    cand = db.active_candidate("main")
+    assert cand["id"] == cand_id
+    assert cand["commit_sha"] == "deadbeef"
+    assert db.active_candidate("other") is None
+    db.set_candidate_state(cand_id, "promoted")
+    assert db.active_candidate("main") is None
