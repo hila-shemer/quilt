@@ -45,14 +45,18 @@ def advance(repo: Path, db, cfg) -> bool | None:
         return None
     mp = db.get_merge_point(cand["mp_id"])
     db.set_validation(mp["id"], "inflight")
-    with tempfile.TemporaryDirectory() as wt:
-        gitio.git(repo, "worktree", "add", "--detach", wt, cand["commit_sha"])
-        try:
-            cmd = cfg.promotion["final_cmd"].replace("{workdir}", wt)
-            proc = subprocess.run(cmd, shell=True, cwd=wt,
-                                  capture_output=True, text=True)
-        finally:
-            gitio.git(repo, "worktree", "remove", "--force", wt, check=False)
+    try:
+        with tempfile.TemporaryDirectory() as wt:
+            gitio.git(repo, "worktree", "add", "--detach", wt, cand["commit_sha"])
+            try:
+                cmd = cfg.promotion["final_cmd"].replace("{workdir}", wt)
+                proc = subprocess.run(cmd, shell=True, cwd=wt,
+                                      capture_output=True, text=True)
+            finally:
+                gitio.git(repo, "worktree", "remove", "--force", wt, check=False)
+    except BaseException:
+        db.set_validation(mp["id"], "untested")
+        raise
     status = "pass" if proc.returncode == 0 else "fail"
     db.record_gate(mp["id"], cfg.promotion["final_gate"],
                    mp["base_commit_sha"], status)

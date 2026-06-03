@@ -86,6 +86,22 @@ def test_advance_without_freeze(gated):
     assert candidate.advance(r.path, db, cfg) is None
 
 
+def test_advance_exception_resets_inflight(gated, monkeypatch):
+    """A crash mid-advance must not leave the merge point stuck inflight."""
+    r, db, cfg = gated
+    out = candidate.freeze(r.path, db, cfg)
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated crash")
+
+    monkeypatch.setattr(candidate.subprocess, "run", boom)
+    with pytest.raises(OSError):
+        candidate.advance(r.path, db, cfg)
+    mp = db.get_merge_point(out["merge_point"])
+    assert mp["validation_state"] == "untested"
+    assert db.active_candidate("main") is not None   # still frozen, retryable
+
+
 def test_freeze_advance_cli(gated, tmp_path, capsys):
     from quilt import cli
     r, db, cfg = gated
