@@ -29,6 +29,15 @@ def test_probe_records_clean_and_conflict(repo_with_branches, db):
     assert mp is not None
 
 
+def test_probe_all_raises_on_empty_diff(repo, db):
+    """A branch that has no commits ahead of base produces an empty diff;
+    probe_all must raise ValueError whose message names the branch."""
+    repo.branch("empty-branch")
+    repo.git("checkout", "-q", "main")
+    with pytest.raises(ValueError, match="empty-branch"):
+        probe.probe_all(repo.path, "main", ["empty-branch"], db)
+
+
 def test_probe_marks_conflicts(repo_with_branches, db):
     r = repo_with_branches
     r.git("checkout", "-q", "main")

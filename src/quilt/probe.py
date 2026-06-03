@@ -18,11 +18,15 @@ def enumerate_combos(branches: list[str]) -> list[tuple[str, ...]]:
     return out
 
 
-def probe_combo(repo: Path, base: str, branches: tuple[str, ...]):
+def probe_combo(repo: Path, base: str, branches: tuple[str, ...],
+                pids: dict[str, str]):
     """Merge branches into base sequentially via merge-tree; returns
-    (construction, result_commit, result_tree)."""
+    (construction, result_commit, result_tree).
+
+    *pids* is a pre-computed {branch: patch_id} dict (from probe_all) used
+    to sort the merge order without re-invoking git patch-id."""
     current = gitio.rev(repo, base)
-    for branch in sorted(branches, key=lambda b: gitio.patch_id(repo, base, b)):
+    for branch in sorted(branches, key=pids.__getitem__):
         res = gitio.merge_tree(repo, current, branch)
         if not res.clean:
             return "conflict", None, None
@@ -35,12 +39,17 @@ def probe_combo(repo: Path, base: str, branches: tuple[str, ...]):
 def probe_all(repo: Path, base: str, branches: list[str], db) -> list[dict]:
     base_tree = gitio.tree_of(repo, base)
     base_commit = gitio.rev(repo, base)
-    pids = {b: gitio.patch_id(repo, base, b) for b in branches}
+    pids = {}
+    for b in branches:
+        try:
+            pids[b] = gitio.patch_id(repo, base, b)
+        except gitio.GitError:
+            raise ValueError(f"branch {b} has empty diff vs base")
     results = []
     for combo in enumerate_combos(branches):
         member_pids = [pids[b] for b in combo]
         mp_id = merge_point_id(base_tree, member_pids)
-        construction, commit, tree = probe_combo(repo, base, combo)
+        construction, commit, tree = probe_combo(repo, base, combo, pids)
         db.upsert_merge_point(
             id=mp_id, base_tree_sha=base_tree, base_commit_sha=base_commit,
             member_patch_ids=member_pids,

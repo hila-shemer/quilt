@@ -1,5 +1,6 @@
 """SQLite store. The DB is the source of truth about combinations; git only
-stores trees and refs. member_patch_ids stored sorted comma-joined."""
+stores trees and refs. Both member_patch_ids and member_tips are stored as
+JSON-encoded sorted lists."""
 import json
 import sqlite3
 import time
@@ -75,7 +76,7 @@ class DB:
                  result_tree=excluded.result_tree,
                  construction=excluded.construction""",
             (id, base_tree_sha, base_commit_sha,
-             ",".join(sorted(member_patch_ids)), json.dumps(member_tips),
+             json.dumps(sorted(member_patch_ids)), json.dumps(member_tips),
              result_commit, result_tree, construction, int(time.time())))
         self.conn.commit()
 
@@ -84,7 +85,7 @@ class DB:
         if not row:
             return None
         d = dict(row)
-        d["member_patch_ids"] = d["member_patch_ids"].split(",")
+        d["member_patch_ids"] = json.loads(d["member_patch_ids"])
         d["member_tips"] = json.loads(d["member_tips"])
         return d
 
