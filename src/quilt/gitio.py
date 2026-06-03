@@ -4,9 +4,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+class GitError(Exception):
+    """Raised when a git command fails fatally or produces unexpected output."""
+
+
+def _run(repo: Path, *args: str, input_text: str | None = None,
+         check: bool = True) -> subprocess.CompletedProcess:
+    """Run a git command inside *repo* and return the CompletedProcess."""
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        input=input_text, check=check, capture_output=True, text=True,
+    )
+
+
 def git(repo: Path, *args: str, check: bool = True) -> str:
-    return subprocess.run(["git", "-C", str(repo), *args],
-                          check=check, capture_output=True, text=True).stdout.strip()
+    return _run(repo, *args, check=check).stdout.strip()
 
 
 def rev(repo: Path, committish: str) -> str:
@@ -18,11 +30,11 @@ def tree_of(repo: Path, committish: str) -> str:
 
 
 def patch_id(repo: Path, base: str, tip: str) -> str:
-    """Stable patch-id of the combined diff base..tip (metadata-insensitive)."""
-    diff = subprocess.run(["git", "-C", str(repo), "diff", f"{base}...{tip}"],
-                          check=True, capture_output=True, text=True).stdout
-    out = subprocess.run(["git", "-C", str(repo), "patch-id", "--stable"],
-                         input=diff, check=True, capture_output=True, text=True).stdout
+    """Stable patch-id of the combined diff base...tip (metadata-insensitive)."""
+    diff = _run(repo, "diff", f"{base}...{tip}").stdout
+    if not diff:
+        raise GitError(f"empty diff: {base}...{tip}")
+    out = _run(repo, "patch-id", "--stable", input_text=diff).stdout
     return out.split()[0] if out else ""
 
 
@@ -34,14 +46,19 @@ class MergeResult:
 
 
 def merge_tree(repo: Path, branch1: str, branch2: str) -> MergeResult:
-    p = subprocess.run(
-        ["git", "-C", str(repo), "merge-tree", "--write-tree",
-         "--name-only", "--no-messages", branch1, branch2],
-        capture_output=True, text=True)
+    p = _run(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages",
+             branch1, branch2, check=False)
     lines = p.stdout.splitlines()
     tree = lines[0].strip() if lines else ""
     if p.returncode == 0:
         return MergeResult(clean=True, tree=tree)
+    # Distinguish conflict (tree written, stdout has content) from fatal error
+    # (bad ref, missing object, etc. → stdout is empty).
+    if not tree:
+        raise GitError(
+            f"git merge-tree failed fatally for '{branch1}' / '{branch2}': "
+            + p.stderr.strip()
+        )
     return MergeResult(clean=False, tree=tree, conflict_files=lines[1:])
 
 

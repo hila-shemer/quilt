@@ -3,6 +3,29 @@ import pytest
 from quilt import gitio
 
 
+# ---------------------------------------------------------------------------
+# GitError tests (new behaviour)
+# ---------------------------------------------------------------------------
+
+def test_merge_tree_bad_ref_raises_git_error(repo):
+    """merge_tree with a non-existent branch must raise GitError, not silently
+    return a MergeResult(clean=False, tree="")."""
+    with pytest.raises(gitio.GitError):
+        gitio.merge_tree(repo.path, "no-such-branch", "main")
+
+
+def test_patch_id_empty_diff_raises_git_error(repo):
+    """patch_id for a branch with no commits beyond main raises GitError."""
+    repo.branch("empty-branch")           # identical to main, no new commits
+    repo.git("checkout", "-q", "main")
+    with pytest.raises(gitio.GitError, match="empty diff"):
+        gitio.patch_id(repo.path, "main", "empty-branch")
+
+
+# ---------------------------------------------------------------------------
+# Existing tests (must keep passing)
+# ---------------------------------------------------------------------------
+
 def test_patch_id_stable_across_metadata(repo_with_branches):
     r = repo_with_branches
     pid1 = gitio.patch_id(r.path, "main", "feat-clean")
