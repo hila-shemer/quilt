@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from . import gates as gates_mod
-from . import gitio, probe, scheduler
+from . import gitio, probe, resolve, scheduler
 from .db import DB
 
 
@@ -20,6 +20,8 @@ def main(argv=None):
     sub.add_parser("queue")
     p = sub.add_parser("promote")
     p.add_argument("target")
+    pp = sub.add_parser("poison")
+    pp.add_argument("merge_point_id")
     args = ap.parse_args(argv)
 
     repo = Path(args.repo)
@@ -56,6 +58,20 @@ def main(argv=None):
         gitio.update_ref(repo, f"refs/quilt/target/{args.target}", best["result_commit"])
         print(f"{args.target} -> {best['result_commit'][:12]} "
               f"(gate {required}, {len(best['member_patch_ids'])} members)")
+    elif args.cmd == "poison":
+        prefix = args.merge_point_id
+        matches = db.find_merge_point(prefix)
+        if len(matches) == 0:
+            print(f"no merge-point matches prefix: {prefix}")
+            sys.exit(1)
+        if len(matches) > 1:
+            print(f"ambiguous prefix {prefix!r} matches {len(matches)} merge-points: "
+                  + ", ".join(m[:12] for m in matches))
+            sys.exit(1)
+        full_id = matches[0]
+        cascade_ids = db.set_validation(full_id, "poison")
+        resolve.evict(repo, db, cascade_ids)
+        print(f"poisoned {full_id}, evicted {len(cascade_ids)} dependents")
 
 
 if __name__ == "__main__":

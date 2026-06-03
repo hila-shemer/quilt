@@ -149,6 +149,13 @@ class DB:
             (kind, target_id, detail, int(time.time())))
         self.conn.commit()
 
+    def find_merge_point(self, prefix: str) -> list[str]:
+        """Return list of full IDs matching prefix (SQL LIKE 'prefix%')."""
+        rows = self.conn.execute(
+            "SELECT id FROM merge_point WHERE id LIKE ?", (prefix + "%",)
+        ).fetchall()
+        return [r["id"] for r in rows]
+
     def pending_work(self):
         return [dict(r) for r in self.conn.execute(
             "SELECT * FROM work_queue WHERE state='queued' ORDER BY id")]
