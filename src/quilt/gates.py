@@ -54,15 +54,23 @@ def run_ladder(repo: Path, db, cfg: Config, mp_id: str) -> str | None:
                 if db.gate_result(mp_id, gate["name"], base) == "pass":
                     highest = gate["name"]
                     continue
+                state = db.get_merge_point(mp_id)["validation_state"]
+                long_gate = bool(gate.get("long")) and state != "poison"
+                if long_gate:
+                    db.set_validation(mp_id, "inflight")
                 cmd = gate["cmd"].replace("{workdir}", wt)
                 proc = subprocess.run(cmd, shell=True, cwd=wt,
                                       capture_output=True, text=True)
                 status = "pass" if proc.returncode == 0 else "fail"
                 db.record_gate(mp_id, gate["name"], base, status)
                 if status == "fail":
+                    if long_gate:
+                        db.set_validation(mp_id, "untested")
                     db.enqueue_work("test_fail", mp_id,
                                     f"{gate['name']}: {proc.stdout[-1000:]}{proc.stderr[-1000:]}")
                     break
+                if long_gate:
+                    db.set_validation(mp_id, "validated")
                 highest = gate["name"]
         finally:
             gitio.git(repo, "worktree", "remove", "--force", wt, check=False)

@@ -144,3 +144,56 @@ def test_config_llm_and_promotion(tmp_path):
 def test_config_llm_promotion_default_empty(cfg):
     assert cfg.llm == {}
     assert cfg.promotion == {}
+
+
+CFG_LONG = """
+[quilt]
+base = "main"
+branches = ["feat-clean"]
+
+[[gate]]
+name = "compiles"
+cmd = "test -f base.txt"
+
+[[gate]]
+name = "t4h"
+cmd = "test -f feature.txt"
+long = true
+
+[targets]
+local-stable = "t4h"
+"""
+
+
+@pytest.fixture
+def cfg_long(tmp_path):
+    p = tmp_path / "long.toml"
+    p.write_text(CFG_LONG)
+    return gates.load_config(p)
+
+
+def test_long_gate_pass_sets_validated(repo_with_branches, db, cfg_long):
+    [mp] = probe.probe_all(repo_with_branches.path, "main", ["feat-clean"], db)
+    assert gates.run_ladder(repo_with_branches.path, db, cfg_long, mp["id"]) == "t4h"
+    assert db.get_merge_point(mp["id"])["validation_state"] == "validated"
+
+
+def test_long_gate_fail_resets_untested(repo_with_branches, db, cfg_long):
+    # feat-conflict lacks feature.txt → t4h fails
+    [mp] = probe.probe_all(repo_with_branches.path, "main", ["feat-conflict"], db)
+    assert gates.run_ladder(repo_with_branches.path, db, cfg_long, mp["id"]) == "compiles"
+    assert db.get_merge_point(mp["id"])["validation_state"] == "untested"
+    assert db.pending_work()[0]["kind"] == "test_fail"
+
+
+def test_long_gate_never_overwrites_poison(repo_with_branches, db, cfg_long):
+    [mp] = probe.probe_all(repo_with_branches.path, "main", ["feat-clean"], db)
+    db.set_validation(mp["id"], "poison")
+    gates.run_ladder(repo_with_branches.path, db, cfg_long, mp["id"])
+    assert db.get_merge_point(mp["id"])["validation_state"] == "poison"
+
+
+def test_short_gate_does_not_validate(repo_with_branches, db, cfg):
+    [mp] = probe.probe_all(repo_with_branches.path, "main", ["feat-clean"], db)
+    gates.run_ladder(repo_with_branches.path, db, cfg, mp["id"])
+    assert db.get_merge_point(mp["id"])["validation_state"] == "untested"
