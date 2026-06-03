@@ -21,6 +21,10 @@ git commit -qm "agent: glue fix"
 
 FAIL_STUB = "#!/bin/sh\ncat >/dev/null\nexit 1\n"
 
+CONCLUDE_STUB = RESOLVE_STUB + """git add -A
+git commit -qm "agent: resolve merge"
+"""
+
 
 @pytest.fixture
 def db(tmp_path):
@@ -123,3 +127,45 @@ resolve_cmd = "{stub}"
               "--db", str(dbfile), "resolve"])
     out = capsys.readouterr().out
     assert "resolved=1" in out
+
+
+def test_agent_resolves_multi_tip_conflicts(tmp_path, repo_with_branches, db):
+    """Two member branches each conflict (one vs base edit, one vs the other);
+    the agent stub runs once per conflicted merge step."""
+    r = repo_with_branches
+    r.branch("feat-conflict2")
+    r.commit_file("base.txt", "line1\nline2\nOTHER\n")     # edits line3
+    r.git("checkout", "-q", "main")
+    r.commit_file("base.txt", "line1\nMAIN\nline3\n")      # base moves: line2
+    results = probe.probe_all(r.path, "main",
+                              ["feat-conflict", "feat-conflict2"], db)
+    pair = next(x for x in results if len(x["branches"]) == 2)
+    assert pair["construction"] == "conflict"
+    db.enqueue_work("conflict", pair["id"], "multi conflict")
+    item = db.pending_work()[0]
+    db.set_work_state(item["id"], "triaged")
+    cfg_path = tmp_path / "multi.toml"
+    stub = make_stub(tmp_path, "a.sh", RESOLVE_STUB)
+    cfg_path.write_text(f"""
+[quilt]
+base = "main"
+branches = ["feat-conflict", "feat-conflict2"]
+
+[llm]
+resolve_cmd = "{stub}"
+""")
+    cfg = gates.load_config(cfg_path)
+    assert agent.resolve_conflict(r.path, db, cfg, dict(item)) is True
+    mp = db.get_merge_point(pair["id"])
+    assert mp["construction"] == "agent"
+    merged = r.git("show", f"{mp['result_commit']}:base.txt")
+    assert "MAIN" in merged and "CONFLICT" in merged and "OTHER" in merged
+
+
+def test_agent_concluded_merge_without_glue_is_agent(tmp_path, conflict_item):
+    r, db, item = conflict_item
+    cfg = _cfg(tmp_path, make_stub(tmp_path, "a.sh", CONCLUDE_STUB))
+    assert agent.resolve_conflict(r.path, db, cfg, item) is True
+    mp = db.get_merge_point(item["target_id"])
+    assert mp["construction"] == "agent"          # no glue commits
+    assert db.list_fixes() == []
