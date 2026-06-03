@@ -1,5 +1,6 @@
 """quilt CLI."""
 import argparse
+import sys
 from pathlib import Path
 
 from . import gates as gates_mod
@@ -29,7 +30,8 @@ def main(argv=None):
         for r in probe.probe_all(repo, cfg.base, cfg.branches, db):
             print(f"{r['id'][:12]} {r['construction']:9} {'+'.join(r['branches'])}")
     elif args.cmd == "tick":
-        print(scheduler.tick(repo, db, cfg))
+        r = scheduler.tick(repo, db, cfg)
+        print(" ".join(f"{k}={v}" for k, v in r.items()))
     elif args.cmd == "status":
         for mp in db.list_merge_points(gitio.tree_of(repo, cfg.base)):
             highest = db.highest_gate(mp["id"], mp["base_commit_sha"], cfg.ladder)
@@ -39,6 +41,9 @@ def main(argv=None):
         for w in db.pending_work():
             print(f"{w['id']:4} {w['kind']:10} {w['target_id'][:12]} {w['detail'][:60]}")
     elif args.cmd == "promote":
+        if args.target not in cfg.targets:
+            print(f"unknown target: {args.target}")
+            sys.exit(1)
         required = cfg.targets[args.target]
         candidates = [mp for mp in db.list_merge_points(gitio.tree_of(repo, cfg.base))
                       if args.target in gates_mod.ready_targets(db, cfg, mp["id"])
@@ -46,7 +51,7 @@ def main(argv=None):
         candidates.sort(key=lambda mp: len(mp["member_patch_ids"]), reverse=True)
         if not candidates:
             print(f"no merge-point ready for {args.target}")
-            return
+            sys.exit(1)
         best = candidates[0]
         gitio.update_ref(repo, f"refs/quilt/target/{args.target}", best["result_commit"])
         print(f"{args.target} -> {best['result_commit'][:12]} "
