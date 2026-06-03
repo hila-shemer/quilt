@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from . import gates as gates_mod
-from . import agent, gitio, llm, probe, resolve, scheduler, triage
+from . import agent, candidate, gitio, llm, probe, resolve, scheduler, triage
 from .db import DB
 
 
@@ -25,6 +25,8 @@ def main(argv=None):
     sub.add_parser("triage")
     sub.add_parser("resolve")
     sub.add_parser("diagnose")
+    sub.add_parser("freeze")
+    sub.add_parser("advance")
     args = ap.parse_args(argv)
 
     repo = Path(args.repo)
@@ -95,6 +97,29 @@ def main(argv=None):
             print(e)
             sys.exit(1)
         print(f"diagnosed={done} remaining={len(items) - done}")
+    elif args.cmd == "freeze":
+        if "target" not in cfg.promotion:
+            print("no [promotion] section configured")
+            sys.exit(1)
+        out = candidate.freeze(repo, db, cfg)
+        if out is None:
+            print("nothing to freeze (no ready merge-point, or already frozen)")
+            sys.exit(1)
+        print(f"frozen candidate {out['candidate']} "
+              f"mp={out['merge_point'][:12]} commit={out['commit'][:12]}")
+    elif args.cmd == "advance":
+        if "target" not in cfg.promotion:
+            print("no [promotion] section configured")
+            sys.exit(1)
+        ok = candidate.advance(repo, db, cfg)
+        if ok is None:
+            print("no frozen candidate")
+            sys.exit(1)
+        if ok:
+            print(f"{cfg.promotion['target']} advanced")
+        else:
+            print("final gate failed; candidate marked failed")
+            sys.exit(1)
     elif args.cmd == "poison":
         prefix = args.merge_point_id
         matches = db.find_merge_point(prefix)
