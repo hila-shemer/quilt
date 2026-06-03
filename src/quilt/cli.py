@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from . import gates as gates_mod
-from . import gitio, probe, resolve, scheduler
+from . import gitio, llm, probe, resolve, scheduler, triage
 from .db import DB
 
 
@@ -22,6 +22,7 @@ def main(argv=None):
     p.add_argument("target")
     pp = sub.add_parser("poison")
     pp.add_argument("merge_point_id")
+    sub.add_parser("triage")
     args = ap.parse_args(argv)
 
     repo = Path(args.repo)
@@ -58,6 +59,15 @@ def main(argv=None):
         gitio.update_ref(repo, f"refs/quilt/target/{args.target}", best["result_commit"])
         print(f"{args.target} -> {best['result_commit'][:12]} "
               f"(gate {required}, {len(best['member_patch_ids'])} members)")
+    elif args.cmd == "triage":
+        try:
+            r = triage.drain(db, cfg)
+        except llm.LLMError as e:
+            print(e)
+            sys.exit(1)
+        print(" ".join(f"{k}={v}" for k, v in r.items()))
+        if r["errors"]:
+            sys.exit(1)
     elif args.cmd == "poison":
         prefix = args.merge_point_id
         matches = db.find_merge_point(prefix)
