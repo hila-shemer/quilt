@@ -76,3 +76,17 @@ def update_ref(repo: Path, ref: str, sha: str) -> None:
 def read_ref(repo: Path, ref: str) -> str | None:
     out = git(repo, "rev-parse", "--verify", "--quiet", ref, check=False)
     return out or None
+
+
+def commit_patch_id(repo: Path, sha: str) -> str:
+    """Stable patch-id of a single commit."""
+    show = _run(repo, "show", sha).stdout
+    out = _run(repo, "patch-id", "--stable", input_text=show).stdout
+    return out.split()[0] if out else ""
+
+
+def patch_ids_of_range(repo: Path, base: str, tip: str) -> set[str]:
+    """Stable patch-ids of every commit in base..tip."""
+    log = _run(repo, "log", "-p", f"{base}..{tip}").stdout
+    out = _run(repo, "patch-id", "--stable", input_text=log).stdout
+    return {line.split()[0] for line in out.splitlines() if line.strip()}

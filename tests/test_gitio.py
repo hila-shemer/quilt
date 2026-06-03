@@ -62,3 +62,26 @@ def test_commit_tree_and_refs(repo_with_branches):
     gitio.update_ref(r.path, "refs/quilt/test", sha)
     assert gitio.read_ref(r.path, "refs/quilt/test") == sha
     assert gitio.read_ref(r.path, "refs/quilt/missing") is None
+
+
+# ---------------------------------------------------------------------------
+# New tests: per-commit patch-id helpers
+# ---------------------------------------------------------------------------
+
+def test_commit_patch_id_in_range(repo_with_branches):
+    r = repo_with_branches
+    tip = r.git("rev-parse", "feat-clean")
+    pid = gitio.commit_patch_id(r.path, tip)
+    assert pid
+    assert pid in gitio.patch_ids_of_range(r.path, "main", "feat-clean")
+
+
+def test_patch_id_survives_cherry_pick(repo):
+    repo.branch("src")
+    sha = repo.commit_file("f.txt", "x\n")
+    repo.git("checkout", "-q", "main")
+    repo.branch("dst")
+    repo.commit_file("other.txt", "y\n")
+    repo.git("cherry-pick", sha)
+    assert gitio.commit_patch_id(repo.path, sha) in \
+        gitio.patch_ids_of_range(repo.path, "main", "dst")
