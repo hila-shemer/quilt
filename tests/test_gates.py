@@ -69,6 +69,17 @@ def test_enqueue_work_no_duplicates(repo_with_branches, db, cfg):
     assert work[0]["kind"] == "test_fail"
 
 
+def test_ready_targets_returns_empty_when_poisoned(repo_with_branches, db, cfg):
+    """I2: ready_targets returns [] when the merge-point is poisoned."""
+    [mp] = probe.probe_all(repo_with_branches.path, "main", ["feat-clean"], db)
+    gates.run_ladder(repo_with_branches.path, db, cfg, mp["id"])
+    # confirm it passes normally first
+    assert gates.ready_targets(db, cfg, mp["id"]) != []
+    # now poison it
+    db.set_validation(mp["id"], "poison")
+    assert gates.ready_targets(db, cfg, mp["id"]) == []
+
+
 def test_run_ladder_skips_worktree_when_all_cached(repo_with_branches, db, cfg, monkeypatch):
     """When all gates are already cached passes, no worktree should be created."""
     [mp] = probe.probe_all(repo_with_branches.path, "main", ["feat-clean"], db)

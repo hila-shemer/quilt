@@ -70,6 +70,8 @@ def ready_targets(db, cfg: Config, mp_id: str) -> list[str]:
     mp = db.get_merge_point(mp_id)
     if not mp:
         return []
+    if mp["validation_state"] == "poison":
+        return []
     highest = db.highest_gate(mp_id, mp["base_commit_sha"], cfg.ladder)
     if highest is None:
         return []

@@ -121,8 +121,11 @@ class DB:
         return highest
 
     def set_validation(self, mp_id, state):
+        """Set validation state. Returns list of cascade-reset merge-point ids
+        (supersets reset to 'untested') when state=='poison', else []."""
         self.conn.execute("UPDATE merge_point SET validation_state=? WHERE id=?",
                           (state, mp_id))
+        cascade_ids = []
         if state == "poison":
             poisoned = self.get_merge_point(mp_id)
             members = set(poisoned["member_patch_ids"])
@@ -131,7 +134,9 @@ class DB:
                     self.conn.execute(
                         "UPDATE merge_point SET validation_state='untested' WHERE id=?",
                         (mp["id"],))
+                    cascade_ids.append(mp["id"])
         self.conn.commit()
+        return cascade_ids
 
     def enqueue_work(self, kind, target_id, detail=""):
         existing = self.conn.execute(

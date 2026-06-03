@@ -3,7 +3,7 @@ Sequential pairwise merges; conflict at any step marks the combo 'conflict'."""
 from itertools import combinations
 from pathlib import Path
 
-from . import gitio
+from . import gitio, resolve
 from .keys import merge_point_id
 
 MAX_BRANCHES = 5
@@ -49,6 +49,13 @@ def probe_all(repo: Path, base: str, branches: list[str], db) -> list[dict]:
     for combo in enumerate_combos(branches):
         member_pids = [pids[b] for b in combo]
         mp_id = merge_point_id(base_tree, member_pids)
+        # Skip upsert+merge if a pinned, non-poison resolution already exists.
+        existing_ref = resolve.reusable_resolution(repo, db, mp_id)
+        if existing_ref is not None:
+            existing_mp = db.get_merge_point(mp_id)
+            results.append({"id": mp_id, "branches": list(combo),
+                            "construction": existing_mp["construction"]})
+            continue
         construction, commit, tree = probe_combo(repo, base, combo, pids)
         db.upsert_merge_point(
             id=mp_id, base_tree_sha=base_tree, base_commit_sha=base_commit,

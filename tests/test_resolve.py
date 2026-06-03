@@ -40,3 +40,29 @@ def test_reuse_returns_pinned_ref(repo_with_branches, db):
     mp_id = res[0]["id"]
     sha = resolve.reusable_resolution(repo_with_branches.path, db, mp_id)
     assert sha == gitio.read_ref(repo_with_branches.path, f"refs/quilt/{mp_id}")
+
+
+def test_evict_removes_superset_ref_and_leaves_poisoned_ref_intact(repo_with_branches, db):
+    """I1: poisoning a subset evicts the superset's ref but not the poisoned one's."""
+    # probe_all creates both a 1-member point and a 2-member point
+    results = probe.probe_all(repo_with_branches.path, "main",
+                              ["feat-clean", "feat-conflict"], db)
+    by_members = {len(r["branches"]): r for r in results}
+    solo_id = by_members[1]["id"]  # 1-member (subset) — to be poisoned
+    pair_id = by_members[2]["id"]  # 2-member (superset)
+
+    # both have refs before poison
+    assert gitio.read_ref(repo_with_branches.path, f"refs/quilt/{pair_id}") is not None
+
+    # poison the 1-member point: DB returns cascade ids
+    cascade_ids = db.set_validation(solo_id, "poison")
+    # evict git refs for all cascade-reset merge-points
+    resolve.evict(repo_with_branches.path, db, cascade_ids)
+
+    # superset ref deleted → reusable_resolution is None
+    assert gitio.read_ref(repo_with_branches.path, f"refs/quilt/{pair_id}") is None
+    assert resolve.reusable_resolution(repo_with_branches.path, db, pair_id) is None
+
+    # poisoned point's own ref still exists (but reusable_resolution still None due to poison)
+    assert gitio.read_ref(repo_with_branches.path, f"refs/quilt/{solo_id}") is not None
+    assert resolve.reusable_resolution(repo_with_branches.path, db, solo_id) is None

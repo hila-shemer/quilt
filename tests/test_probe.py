@@ -1,6 +1,6 @@
 import pytest
 from quilt.db import DB
-from quilt import probe
+from quilt import probe, gitio, resolve
 
 
 @pytest.fixture
@@ -46,3 +46,43 @@ def test_probe_marks_conflicts(repo_with_branches, db):
     by_members = {tuple(sorted(x["branches"])): x for x in results}
     assert by_members[("feat-conflict",)]["construction"] == "conflict"
     assert by_members[("feat-clean",)]["construction"] == "clean"
+
+
+def test_reprobe_does_not_clobber_agent_resolution(repo_with_branches, db):
+    """M1: re-probing a combo that already has a pinned non-poison resolution preserves it."""
+    r = repo_with_branches
+    r.git("checkout", "-q", "main")
+    r.commit_file("base.txt", "line1\nMAIN\nline3\n")
+
+    # First probe: feat-conflict produces conflict
+    results = probe.probe_all(r.path, "main", ["feat-clean", "feat-conflict"], db)
+    by_members = {tuple(sorted(x["branches"])): x for x in results}
+    conflict_id = by_members[("feat-conflict",)]["id"]
+    assert by_members[("feat-conflict",)]["construction"] == "conflict"
+
+    # Simulate agent resolution: pin a ref and upsert construction='agent'
+    # Use feat-clean's commit as a dummy resolved commit
+    dummy_commit = gitio.rev(r.path, "feat-clean")
+    dummy_tree = gitio.tree_of(r.path, dummy_commit)
+    gitio.update_ref(r.path, f"refs/quilt/{conflict_id}", dummy_commit)
+    conflict_mp = db.get_merge_point(conflict_id)
+    db.upsert_merge_point(
+        id=conflict_id,
+        base_tree_sha=conflict_mp["base_tree_sha"],
+        base_commit_sha=conflict_mp["base_commit_sha"],
+        member_patch_ids=conflict_mp["member_patch_ids"],
+        member_tips=conflict_mp["member_tips"],
+        construction="agent",
+        result_commit=dummy_commit,
+        result_tree=dummy_tree,
+    )
+    assert resolve.reusable_resolution(r.path, db, conflict_id) == dummy_commit
+
+    # Re-probe same branches
+    results2 = probe.probe_all(r.path, "main", ["feat-clean", "feat-conflict"], db)
+    by_members2 = {tuple(sorted(x["branches"])): x for x in results2}
+
+    # construction must still be 'agent', not overwritten to 'conflict'
+    assert by_members2[("feat-conflict",)]["construction"] == "agent"
+    # pinned ref still intact
+    assert resolve.reusable_resolution(r.path, db, conflict_id) == dummy_commit

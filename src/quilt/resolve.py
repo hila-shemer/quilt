@@ -7,6 +7,17 @@ from pathlib import Path
 from . import gitio
 
 
+def evict(repo: Path, db, mp_ids: list[str]) -> None:
+    """Delete refs/quilt/<id> for each cascade-reset merge-point id.
+    Ignores missing refs."""
+    import subprocess
+    for mp_id in mp_ids:
+        subprocess.run(
+            ["git", "-C", str(repo), "update-ref", "-d", f"refs/quilt/{mp_id}"],
+            capture_output=True,
+        )
+
+
 def reusable_resolution(repo: Path, db, mp_id: str) -> str | None:
     mp = db.get_merge_point(mp_id)
     if mp is None or mp["validation_state"] == "poison":
