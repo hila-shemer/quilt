@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from . import gates as gates_mod
-from . import agent, candidate, gitio, llm, probe, resolve, scheduler, triage
+from . import agent, backprop, candidate, gitio, llm, probe, resolve, scheduler, triage
 from .db import DB
 
 
@@ -27,6 +27,8 @@ def main(argv=None):
     sub.add_parser("diagnose")
     sub.add_parser("freeze")
     sub.add_parser("advance")
+    pb = sub.add_parser("backprop")
+    pb.add_argument("--out", default=".quilt-patches")
     args = ap.parse_args(argv)
 
     repo = Path(args.repo)
@@ -120,6 +122,15 @@ def main(argv=None):
         else:
             print("final gate failed; candidate marked failed")
             sys.exit(1)
+    elif args.cmd == "backprop":
+        adopted = backprop.check_adopted(repo, db, cfg)
+        written = backprop.offer(repo, db, Path(args.out))
+        for fid in adopted:
+            print(f"adopted fix {fid}")
+        for p in written:
+            print(f"offered {p}")
+        if not adopted and not written:
+            print("no pending or newly-adopted fixes")
     elif args.cmd == "poison":
         prefix = args.merge_point_id
         matches = db.find_merge_point(prefix)
