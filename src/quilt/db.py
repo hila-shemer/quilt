@@ -134,6 +134,11 @@ class DB:
         self.conn.commit()
 
     def enqueue_work(self, kind, target_id, detail=""):
+        existing = self.conn.execute(
+            "SELECT 1 FROM work_queue WHERE kind=? AND target_id=? AND state='queued'",
+            (kind, target_id)).fetchone()
+        if existing:
+            return
         self.conn.execute(
             "INSERT INTO work_queue (kind, target_id, detail, created_at) VALUES (?,?,?,?)",
             (kind, target_id, detail, int(time.time())))

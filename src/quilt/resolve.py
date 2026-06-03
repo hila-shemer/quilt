@@ -14,13 +14,14 @@ def reusable_resolution(repo: Path, db, mp_id: str) -> str | None:
     return gitio.read_ref(repo, f"refs/quilt/{mp_id}")
 
 
-def try_mediate(repo: Path, base: str, db, mp_id: str) -> str | None:
+def try_mediate(repo: Path, db, mp_id: str) -> str | None:
     """Try resolving a conflicted merge-point with git-mediate in a temp
     worktree. Returns merge commit SHA, or None (queues agent work)."""
     mp = db.get_merge_point(mp_id)
     tips = mp["member_tips"]
+    base_commit = mp["base_commit_sha"]
     with tempfile.TemporaryDirectory() as wt:
-        gitio.git(repo, "worktree", "add", "--detach", wt, base)
+        gitio.git(repo, "worktree", "add", "--detach", wt, base_commit)
         try:
             wt_path = Path(wt)
             for tip in tips:
@@ -31,7 +32,7 @@ def try_mediate(repo: Path, base: str, db, mp_id: str) -> str | None:
                 m = subprocess.run(["git-mediate"], cwd=wt,
                                    capture_output=True, text=True)
                 if m.returncode != 0:
-                    db.enqueue_work("conflict", mp_id, m.stdout[-2000:])
+                    db.enqueue_work("conflict", mp_id, (m.stdout + m.stderr)[-2000:])
                     return None
                 subprocess.run(["git", "-C", wt, "commit", "-am",
                                 f"quilt: mediated merge {tip}"],

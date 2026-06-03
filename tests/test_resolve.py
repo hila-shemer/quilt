@@ -20,9 +20,13 @@ def conflicted(repo_with_branches, db):
 
 def test_mediate_fails_on_semantic_conflict(conflicted):
     repo, db, mp_id = conflicted
-    out = resolve.try_mediate(repo.path, "main", db, mp_id)
+    out = resolve.try_mediate(repo.path, db, mp_id)
     assert out is None                      # mediate can't fix both-edited line
     assert db.pending_work()[0]["kind"] == "conflict"
+
+
+def test_reusable_resolution_unknown_mp(db, tmp_path):
+    assert resolve.reusable_resolution(tmp_path, db, "nonexistent-mp-id") is None
 
 
 def test_reuse_blocked_when_poison(conflicted):

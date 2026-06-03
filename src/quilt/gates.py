@@ -35,6 +35,15 @@ def run_ladder(repo: Path, db, cfg: Config, mp_id: str) -> str | None:
         return None
     base = mp["base_commit_sha"]
     highest = None
+
+    # Check whether all gates are already cached passes — skip worktree if so.
+    all_cached = all(
+        db.gate_result(mp_id, gate["name"], base) == "pass"
+        for gate in cfg.gates
+    )
+    if all_cached:
+        return cfg.gates[-1]["name"] if cfg.gates else None
+
     with tempfile.TemporaryDirectory() as wt:
         gitio.git(repo, "worktree", "add", "--detach", wt, mp["result_commit"])
         try:
@@ -42,7 +51,7 @@ def run_ladder(repo: Path, db, cfg: Config, mp_id: str) -> str | None:
                 if db.gate_result(mp_id, gate["name"], base) == "pass":
                     highest = gate["name"]
                     continue
-                cmd = gate["cmd"].format(workdir=wt)
+                cmd = gate["cmd"].replace("{workdir}", wt)
                 proc = subprocess.run(cmd, shell=True, cwd=wt,
                                       capture_output=True, text=True)
                 status = "pass" if proc.returncode == 0 else "fail"
@@ -59,6 +68,8 @@ def run_ladder(repo: Path, db, cfg: Config, mp_id: str) -> str | None:
 
 def ready_targets(db, cfg: Config, mp_id: str) -> list[str]:
     mp = db.get_merge_point(mp_id)
+    if not mp:
+        return []
     highest = db.highest_gate(mp_id, mp["base_commit_sha"], cfg.ladder)
     if highest is None:
         return []
