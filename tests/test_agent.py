@@ -169,3 +169,85 @@ def test_agent_concluded_merge_without_glue_is_agent(tmp_path, conflict_item):
     mp = db.get_merge_point(item["target_id"])
     assert mp["construction"] == "agent"          # no glue commits
     assert db.list_fixes() == []
+
+
+DIAG_RESOLUTION_STUB = ('#!/bin/sh\ncat >/dev/null\n'
+    'echo \'{"attribution": "resolution", "culprit": "", "reason": "bad hunk"}\'\n')
+DIAG_MEMBER_STUB = ('#!/bin/sh\ncat >/dev/null\n'
+    'echo \'{"attribution": "member", "culprit": "abc123", "reason": "feature bug"}\'\n')
+
+
+def _diag_cfg(tmp_path, stub_path):
+    p = tmp_path / "d.toml"
+    p.write_text(f"""
+[quilt]
+base = "main"
+branches = ["feat-clean", "feat-conflict"]
+
+[llm]
+diagnose_cmd = "{stub_path}"
+""")
+    return gates.load_config(p)
+
+
+@pytest.fixture
+def failed_item(repo_with_branches, db):
+    """Probe a clean pair, then fake a gate failure on the single-member
+    subset so poison can cascade to the pair."""
+    r = repo_with_branches
+    results = probe.probe_all(r.path, "main", ["feat-clean", "feat-conflict"], db)
+    by_n = sorted(results, key=lambda x: len(x["branches"]))
+    single, pair = by_n[0], by_n[-1]
+    db.enqueue_work("test_fail", single["id"], "compiles: boom")
+    item = db.pending_work()[0]
+    db.set_work_state(item["id"], "triaged")
+    return r, db, dict(item, state="triaged"), single["id"], pair["id"]
+
+
+def test_diagnose_resolution_poisons_and_evicts(tmp_path, failed_item):
+    r, db, item, single_id, pair_id = failed_item
+    cfg = _diag_cfg(tmp_path, make_stub(tmp_path, "d.sh", DIAG_RESOLUTION_STUB))
+    verdict = agent.diagnose_failure(r.path, db, cfg, item)
+    assert verdict["attribution"] == "resolution"
+    assert db.get_merge_point(single_id)["validation_state"] == "poison"
+    assert db.get_merge_point(pair_id)["validation_state"] == "untested"
+    assert gitio.read_ref(r.path, f"refs/quilt/{pair_id}") is None  # evicted
+    assert db.work_by_state("done")[0]["id"] == item["id"]
+
+
+def test_diagnose_member_does_not_poison(tmp_path, failed_item):
+    r, db, item, single_id, pair_id = failed_item
+    cfg = _diag_cfg(tmp_path, make_stub(tmp_path, "d.sh", DIAG_MEMBER_STUB))
+    verdict = agent.diagnose_failure(r.path, db, cfg, item)
+    assert verdict["attribution"] == "member"
+    assert db.get_merge_point(single_id)["validation_state"] == "untested"
+    assert gitio.read_ref(r.path, f"refs/quilt/{pair_id}") is not None
+    assert db.work_by_state("done")[0]["id"] == item["id"]
+
+
+def test_diagnose_garbage_keeps_item(tmp_path, failed_item):
+    r, db, item, single_id, _ = failed_item
+    cfg = _diag_cfg(tmp_path, make_stub(tmp_path, "d.sh",
+                                        "#!/bin/sh\ncat >/dev/null\necho junk\n"))
+    assert agent.diagnose_failure(r.path, db, cfg, item) is None
+    assert db.work_by_state("triaged")[0]["id"] == item["id"]
+
+
+def test_diagnose_cli(tmp_path, failed_item, capsys):
+    from quilt import cli
+    r, db, item, single_id, _ = failed_item
+    stub = make_stub(tmp_path, "d.sh", DIAG_RESOLUTION_STUB)
+    cfgfile = tmp_path / "d.toml"
+    cfgfile.write_text(f"""
+[quilt]
+base = "main"
+branches = ["feat-clean", "feat-conflict"]
+
+[llm]
+diagnose_cmd = "{stub}"
+""")
+    cli.main(["--repo", str(r.path), "--config", str(cfgfile),
+              "--db", str(tmp_path / "q.sqlite3"), "diagnose"])
+    out = capsys.readouterr().out
+    assert "diagnosed=1" in out
+    assert "resolution" in out

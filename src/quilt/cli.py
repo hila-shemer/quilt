@@ -24,6 +24,7 @@ def main(argv=None):
     pp.add_argument("merge_point_id")
     sub.add_parser("triage")
     sub.add_parser("resolve")
+    sub.add_parser("diagnose")
     args = ap.parse_args(argv)
 
     repo = Path(args.repo)
@@ -80,6 +81,20 @@ def main(argv=None):
             print(e)
             sys.exit(1)
         print(f"resolved={done} remaining={len(items) - done}")
+    elif args.cmd == "diagnose":
+        items = db.work_by_state("triaged", kind="test_fail")
+        done = 0
+        try:
+            for item in items:
+                v = agent.diagnose_failure(repo, db, cfg, item)
+                if v:
+                    done += 1
+                    print(f"{item['target_id'][:12]} -> {v['attribution']}"
+                          f" ({v.get('reason', '')})")
+        except llm.LLMError as e:
+            print(e)
+            sys.exit(1)
+        print(f"diagnosed={done} remaining={len(items) - done}")
     elif args.cmd == "poison":
         prefix = args.merge_point_id
         matches = db.find_merge_point(prefix)

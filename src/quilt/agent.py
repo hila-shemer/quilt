@@ -7,6 +7,18 @@ from pathlib import Path
 
 from . import gitio, llm, resolve
 
+DIAGNOSE_PROMPT = """\
+A test gate failed for merge point {mp_id} (construction: {construction}).
+Member tips: {tips}
+Failure detail:
+{detail}
+
+Decide whether the failure is caused by the merge RESOLUTION itself (bad
+conflict resolution or missing integration glue) or by one of the MEMBER
+branches. Respond with ONLY a JSON object:
+{{"attribution": "resolution" or "member", "culprit": "<member tip sha or empty>", "reason": "<one sentence>"}}
+"""
+
 RESOLVE_PROMPT = """\
 You are resolving a git merge conflict inside this worktree.
 Currently merging: {tip}
@@ -86,3 +98,26 @@ def resolve_conflict(repo: Path, db, cfg, item: dict) -> bool:
             return True
         finally:
             gitio.git(repo, "worktree", "remove", "--force", wt, check=False)
+
+
+def diagnose_failure(repo: Path, db, cfg, item: dict) -> dict | None:
+    """Attribute one triaged test_fail item to the resolution (→ poison +
+    cascade eviction) or a member branch. Returns the verdict, or None if the
+    LLM output was unusable (item stays triaged)."""
+    cmd = cfg.llm.get("diagnose_cmd")
+    if not cmd:
+        raise llm.LLMError("no [llm] diagnose_cmd configured")
+    mp = db.get_merge_point(item["target_id"])
+    prompt = DIAGNOSE_PROMPT.format(
+        mp_id=mp["id"], construction=mp["construction"],
+        tips=", ".join(mp["member_tips"]), detail=item["detail"] or "")
+    try:
+        verdict = llm.run_json(cmd, prompt)
+        if verdict["attribution"] not in ("resolution", "member"):
+            raise llm.LLMError(f"bad attribution: {verdict['attribution']!r}")
+    except (llm.LLMError, KeyError):
+        return None
+    if verdict["attribution"] == "resolution":
+        resolve.poison_merge_point(repo, db, mp["id"])
+    db.set_work_state(item["id"], "done")
+    return verdict
