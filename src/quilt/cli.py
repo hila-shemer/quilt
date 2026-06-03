@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from . import gates as gates_mod
-from . import gitio, llm, probe, resolve, scheduler, triage
+from . import agent, gitio, llm, probe, resolve, scheduler, triage
 from .db import DB
 
 
@@ -23,6 +23,7 @@ def main(argv=None):
     pp = sub.add_parser("poison")
     pp.add_argument("merge_point_id")
     sub.add_parser("triage")
+    sub.add_parser("resolve")
     args = ap.parse_args(argv)
 
     repo = Path(args.repo)
@@ -68,6 +69,17 @@ def main(argv=None):
         print(" ".join(f"{k}={v}" for k, v in r.items()))
         if r["errors"]:
             sys.exit(1)
+    elif args.cmd == "resolve":
+        items = db.work_by_state("triaged", kind="conflict")
+        done = 0
+        try:
+            for item in items:
+                if agent.resolve_conflict(repo, db, cfg, item):
+                    done += 1
+        except llm.LLMError as e:
+            print(e)
+            sys.exit(1)
+        print(f"resolved={done} remaining={len(items) - done}")
     elif args.cmd == "poison":
         prefix = args.merge_point_id
         matches = db.find_merge_point(prefix)
