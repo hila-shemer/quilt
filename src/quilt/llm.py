@@ -5,6 +5,7 @@ inside a worktree where it is expected to edit files; exit 0 means done."""
 import json
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -23,14 +24,25 @@ def extract_json(text: str) -> dict:
 
 
 def run_json(cmd: str, prompt: str, timeout: int = 600) -> dict:
-    p = subprocess.run(shlex.split(cmd), input=prompt,
-                       capture_output=True, text=True, timeout=timeout)
+    try:
+        p = subprocess.run(shlex.split(cmd), input=prompt,
+                           capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise LLMError(f"llm command timed out after {timeout}s") from e
     if p.returncode != 0:
         raise LLMError(f"llm command failed ({p.returncode}): {p.stderr[-500:]}")
     return extract_json(p.stdout)
 
 
 def run_edit(cmd: str, prompt: str, workdir: Path, timeout: int = 3600) -> bool:
-    p = subprocess.run(shlex.split(cmd), input=prompt, cwd=workdir,
-                       capture_output=True, text=True, timeout=timeout)
-    return p.returncode == 0
+    try:
+        p = subprocess.run(shlex.split(cmd), input=prompt, cwd=workdir,
+                           capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"llm edit command timed out after {timeout}s", file=sys.stderr)
+        return False
+    if p.returncode != 0:
+        print(f"llm edit command failed ({p.returncode}): {p.stderr[-500:]}",
+              file=sys.stderr)
+        return False
+    return True

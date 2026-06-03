@@ -38,3 +38,18 @@ def test_run_edit_false_on_failure(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     assert llm.run_edit(str(stub), "fix it", work) is False
+
+
+def test_run_json_timeout_raises_llmerror(tmp_path):
+    stub = make_stub(tmp_path, "slow.sh", "#!/bin/sh\nsleep 5\n")
+    with pytest.raises(llm.LLMError):
+        llm.run_json(str(stub), "x", timeout=1)
+
+
+def test_run_edit_failure_reports_stderr(tmp_path, capsys):
+    stub = make_stub(tmp_path, "fail.sh",
+                     "#!/bin/sh\necho boom >&2\nexit 1\n")
+    work = tmp_path / "work"
+    work.mkdir()
+    assert llm.run_edit(str(stub), "fix it", work) is False
+    assert "boom" in capsys.readouterr().err
