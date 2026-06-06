@@ -63,3 +63,67 @@ class _DBShim:
     """Minimal stand-in exposing only what audit() touches: a .conn."""
     def __init__(self, conn):
         self.conn = conn
+
+
+# ---- Task 3: decision hook (Haiku) — only when inconclusive ----------------
+
+from quilt import gates
+from tests.conftest import make_stub
+
+_NOVEL = dict(stdout="<<< custom harness blob with no recognizable summary >>>",
+              expected_tests=None, coverage_paths=[], diff_paths=["a.c"])
+
+
+def _cfg_with_audit(tmp_path, audit_cmd):
+    p = tmp_path / "quilt.toml"
+    p.write_text(f"""
+[quilt]
+base = "main"
+branches = ["x"]
+
+[llm]
+audit_cmd = "{audit_cmd}"
+""")
+    return gates.load_config(p)
+
+
+def test_inconclusive_consults_haiku(gate_run, tmp_path):
+    stub = make_stub(tmp_path, "audit.sh",
+                     '#!/bin/sh\ncat >/dev/null\n'
+                     'echo \'{"real_green": false, "reason": "harness aborted"}\'\n')
+    cfg = _cfg_with_audit(tmp_path, stub)
+    v = audit.audit(gate_run(**_NOVEL), None, cfg)
+    assert v.inconclusive and not v.real_green and "harness" in v.reason
+
+
+def test_inconclusive_hook_can_pass(gate_run, tmp_path):
+    stub = make_stub(tmp_path, "audit.sh",
+                     '#!/bin/sh\ncat >/dev/null\n'
+                     'echo \'{"real_green": true, "reason": "ran fine, novel format"}\'\n')
+    cfg = _cfg_with_audit(tmp_path, stub)
+    v = audit.audit(gate_run(**_NOVEL), None, cfg)
+    assert v.inconclusive and v.real_green
+
+
+def test_hook_llm_error_fails_closed(gate_run, tmp_path):
+    stub = make_stub(tmp_path, "audit.sh", '#!/bin/sh\nexit 1\n')
+    cfg = _cfg_with_audit(tmp_path, stub)
+    v = audit.audit(gate_run(**_NOVEL), None, cfg)
+    assert not v.real_green and v.inconclusive
+    assert "error" in v.reason.lower()
+
+
+def test_no_audit_cmd_fails_closed(gate_run):
+    v = audit.audit(gate_run(**_NOVEL), None, None)
+    assert not v.real_green and v.inconclusive
+
+
+def test_happy_path_never_calls_hook(gate_run, tmp_path):
+    marker = tmp_path / "called"
+    stub = make_stub(tmp_path, "audit.sh",
+                     f'#!/bin/sh\ntouch {marker}\ncat >/dev/null\n'
+                     'echo \'{"real_green": true, "reason": "x"}\'\n')
+    cfg = _cfg_with_audit(tmp_path, stub)
+    v = audit.audit(gate_run(), None, cfg)        # deterministic real-green
+    assert v.real_green and not v.inconclusive
+    assert not marker.exists()                    # zero LLM calls on the happy path
