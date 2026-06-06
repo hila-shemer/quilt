@@ -46,8 +46,23 @@ CREATE TABLE IF NOT EXISTS dep_edge (
 );
 """
 
+# Per-commit gate cache (§4.3): keyed on the commit's TREE, distinct from quilt's
+# per-merge-point gate_status. Identical trees at different commit shas share a
+# row → fast-forward into next_staging is a pure cache-hit operation (P3).
+COMMIT_GATE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS commit_gate (
+  tree_sha    TEXT NOT NULL,
+  gate        TEXT NOT NULL,
+  status      TEXT NOT NULL,   -- only 'pass' is cached; fails re-run
+  result_ref  TEXT,
+  finished_at INTEGER NOT NULL,
+  PRIMARY KEY (tree_sha, gate)
+);
+"""
+
 
 def apply(conn) -> None:
     conn.executescript(AUDIT_SCHEMA)
     conn.executescript(INCREMENT_SCHEMA)
+    conn.executescript(COMMIT_GATE_SCHEMA)
     conn.commit()

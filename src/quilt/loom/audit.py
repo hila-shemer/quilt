@@ -27,6 +27,7 @@ class GateRun:
     coverage_paths: list[str] = field(default_factory=list)
     diff_paths: list[str] = field(default_factory=list)
     built_tree_sha: str | None = None   # tree actually checked out for the build, if observed
+    is_test: bool = True                # False for build/compile gates that run no tests
 
 
 @dataclass
@@ -86,6 +87,10 @@ def _deterministic(run: GateRun) -> Verdict | None:
     if run.built_tree_sha is not None and run.built_tree_sha != run.tree_sha:
         return Verdict(False,
                        f"binary built from tree {run.built_tree_sha[:12]} != candidate {run.tree_sha[:12]}")
+
+    # A build/compile gate runs no tests: only exit-code + built-from-tree apply.
+    if not run.is_test:
+        return None
 
     # 3. parse the harness summary; unparseable → inconclusive (decision hook).
     counts = _parse_counts(run.stdout + "\n" + run.stderr)
