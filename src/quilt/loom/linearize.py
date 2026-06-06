@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import gitio
-from . import commitcache, increments
+from . import commitcache, decide, increments
 from .worktree import WorktreePool
 
 STAGING_REF = "refs/loom/staging"
@@ -92,4 +92,53 @@ def solve(repo: Path, db, cfg, incs: list, pool: WorktreePool | None = None) -> 
             increments.set_status(db, inc_id, "parked")
         if sol.seam_kind == "conflict":
             db.enqueue_work("conflict", sol.seam, "linearizer seam: cherry-pick conflict")
+    return sol
+
+
+def _reset_status(db, incs) -> None:
+    for inc in incs:
+        increments.set_status(db, inc.id, "building")
+
+
+def _classify_seam(repo: Path, db, cfg, sol: Solution, incs: list) -> dict:
+    """The one judgment a script can't make (spec §6.2 decision hook): at a red
+    seam, is this a hard-dependency (→ reorder, free) or an incidental-conflict
+    (→ repair, debt)? Haiku: (seam diff) -> {kind: hard|incidental, easy_fix}.
+    Defaults to 'incidental' when no classifier is configured or it errors —
+    the safe choice (don't thrash reordering on a guess)."""
+    seam_inc = next(i for i in incs if i.id == sol.seam)
+    diff = gitio.git(repo, "show", "--stat", "--patch", seam_inc.patches["self"])
+    prompt = (
+        "A linearizer seam: applying this increment on the current prefix was red "
+        f"(kind={sol.seam_kind}). Classify whether the increment has a HARD dependency "
+        "on another increment that must precede it (reorder fixes it), or an INCIDENTAL "
+        "conflict that needs a code fix.\n"
+        f"--- increment diff ---\n{diff[:6000]}\n"
+        'Reply JSON: {"kind": "hard"|"incidental", "easy_fix": bool}'
+    )
+    verdict = decide.decide_json(cfg, "seam", prompt, db=db, task_type="seam")
+    return verdict or {"kind": "incidental", "easy_fix": False}
+
+
+def solve_seams(repo: Path, db, cfg, incs: list, pool: WorktreePool | None = None,
+                max_reorders: int = 8) -> Solution:
+    """Wrap solve() with the seam classifier: on a red seam, try REORDER before
+    REPAIR. A 'hard' verdict records dep_edge(seam -> each later increment) and
+    re-solves (reorder is non-destructive); the re-solve is the deterministic
+    re-check (§7) — if the seam can't be cleared by reordering it falls through
+    to repair (park). 'incidental' parks immediately."""
+    pool = pool or WorktreePool(repo, size=4)
+    sol = None
+    for attempt in range(max_reorders + 1):
+        _reset_status(db, incs)
+        sol = solve(repo, db, cfg, incs, pool)
+        if sol.seam is None:
+            return sol
+        verdict = _classify_seam(repo, db, cfg, sol, incs)
+        later = sol.order[sol.order.index(sol.seam) + 1:]
+        if verdict.get("kind") == "hard" and later and attempt < max_reorders:
+            for y in later:
+                increments.add_dep_edge(db, sol.seam, y, evidence="seam: hard-dep")
+            continue                       # reorder, then re-solve (before any repair)
+        return sol                          # incidental / no candidate / budget spent → park
     return sol

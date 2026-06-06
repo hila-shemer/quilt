@@ -81,6 +81,52 @@ def test_conflict_seam_parks_and_enqueues(repo, db, pool):
     assert db.pending_work()[0]["kind"] == "conflict"
 
 
+# ---- Task 5: seam classification + reorder-before-repair -------------------
+
+from tests.conftest import make_stub
+
+_NEEDS_LIB = [{"name": "build", "test": False, "cmd": "test -f lib.txt"}]
+
+
+def _cfg_seam(tmp_path, verdict_json, gate_dicts=None):
+    stub = make_stub(tmp_path, "seam.sh",
+                     f'#!/bin/sh\ncat >/dev/null\necho \'{verdict_json}\'\n')
+    return gates.Config(base="main", branches=[],
+                        gates=gate_dicts or _NEEDS_LIB, targets={},
+                        llm={"seam_cmd": str(stub)})
+
+
+def test_hard_dep_reorders_and_records_edge(repo, db, pool, tmp_path):
+    c = _cfg_seam(tmp_path, '{"kind":"hard","easy_fix":false}')
+    x = make_inc(repo, db, "x", "x.txt", "X\n")        # needs lib.txt (created first)
+    y = make_inc(repo, db, "y", "lib.txt", "ok\n")     # provides lib.txt
+    sol = linearize.solve_seams(repo.path, db, c, [x, y], pool)
+    assert sol.seam is None
+    assert sol.landed == ["y", "x"]                     # reordered: prerequisite first
+    assert sol.order.index("y") < sol.order.index("x")
+    assert ("x", "y") in {(e["x"], e["y"]) for e in increments.list_dep_edges(db)}
+
+
+def test_incidental_does_not_reorder_and_parks(repo, db, pool, tmp_path):
+    c = _cfg_seam(tmp_path, '{"kind":"incidental","easy_fix":true}')
+    x = make_inc(repo, db, "x", "x.txt", "X\n")        # red: lib.txt never provided in this order
+    y = make_inc(repo, db, "y", "lib.txt", "ok\n")
+    sol = linearize.solve_seams(repo.path, db, c, [x, y], pool)
+    assert sol.seam == "x"
+    assert increments.get(db, "x").status == "parked"
+    assert increments.list_dep_edges(db) == []          # no reorder attempted
+    assert any(w["kind"] == "test_fail" for w in db.pending_work())
+
+
+def test_no_classifier_defaults_to_repair(repo, db, pool):
+    # no seam_cmd configured → safe default is incidental (park), not reorder.
+    c = gates.Config(base="main", branches=[], gates=_NEEDS_LIB, targets={})
+    x = make_inc(repo, db, "x", "x.txt", "X\n")
+    y = make_inc(repo, db, "y", "lib.txt", "ok\n")
+    sol = linearize.solve_seams(repo.path, db, c, [x, y], pool)
+    assert sol.seam == "x" and increments.list_dep_edges(db) == []
+
+
 def test_zero_llm_calls_on_clean_solve(repo, db, pool, tmp_path):
     # a configured audit_cmd that records if invoked; a clean solve must not call it.
     marker = tmp_path / "llm-called"
