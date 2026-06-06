@@ -29,6 +29,7 @@ class Solution:
     seam: str | None = None                # increment id at the first red seam
     seam_kind: str | None = None           # 'conflict' | 'test-fail'
     commits: dict = field(default_factory=dict)        # inc id -> landed commit sha
+    split_needed: list[str] = field(default_factory=list)   # irreducible-cycle increment ids
 
     def commit_of(self, inc_id: str) -> str | None:
         return self.commits.get(inc_id)
@@ -120,6 +121,82 @@ def _classify_seam(repo: Path, db, cfg, sol: Solution, incs: list) -> dict:
     return verdict or {"kind": "incidental", "easy_fix": False}
 
 
+# --- commit-level interleave (spec §6.2 cycle handling) ---------------------
+
+def _topo_commits(nodes: list[str], prereqs: dict) -> list[str] | None:
+    """Deterministic topological order of commit nodes, or None if cyclic.
+    This is the commit-granularity retry engine."""
+    placed, placed_set, remaining = [], set(), set(nodes)
+    while remaining:
+        ready = sorted(n for n in remaining if prereqs.get(n, set()) <= placed_set)
+        if not ready:
+            return None
+        nxt = ready[0]
+        placed.append(nxt)
+        placed_set.add(nxt)
+        remaining.discard(nxt)
+    return placed
+
+
+def _inc_commits(repo: Path, inc) -> list[str]:
+    """The commits an increment contributes (oldest→newest). Single-commit model
+    unless inc.base is set, in which case it is the range base..tip."""
+    tip = inc.patches["self"]
+    if inc.base:
+        out = gitio.git(repo, "rev-list", "--reverse", f"{inc.base}..{tip}")
+        return [c for c in out.splitlines() if c.strip()] or [tip]
+    return [tip]
+
+
+def _commit_interleave(repo: Path, incs: list, cycle_ids, edges) -> list[str] | None:
+    """Expand the increment set to commit nodes and attempt a commit-granular
+    order. Edge (X->Y) means every commit of Y precedes every commit of X; plus
+    intra-increment order. Returns the commit order, or None if still cyclic.
+
+    Note: with increment-granular dep evidence an increment SCC stays an SCC at
+    commit level, so a true series-level cycle is irreducible here (→ split-
+    needed). Finer commit-level evidence (a future enhancement) is what would
+    let this break a cycle."""
+    commits_of = {inc.id: _inc_commits(repo, inc) for inc in incs}
+    nodes = [c for cs in commits_of.values() for c in cs]
+    prereqs: dict = {c: set() for c in nodes}
+    for cs in commits_of.values():                 # intra-increment order
+        for earlier, later in zip(cs, cs[1:]):
+            prereqs[later].add(earlier)
+    for e in edges:                                 # inter-increment edges
+        x, y = e["x"], e["y"]
+        if x in commits_of and y in commits_of:
+            for cx in commits_of[x]:
+                for cy in commits_of[y]:
+                    prereqs[cx].add(cy)
+    return _topo_commits(nodes, prereqs)
+
+
+def _solve_commits(repo: Path, db, cfg, commit_order: list[str],
+                   pool: WorktreePool) -> Solution:
+    """Materialize a commit-granular order (the reducible-cycle path): cherry-pick
+    each commit onto the running tip, gate it, publish the maximal green prefix."""
+    sol = Solution(order=list(commit_order))
+    base_sha = gitio.rev(repo, cfg.base)
+    gitio.update_ref(repo, STAGING_REF, base_sha)
+    sol.staging_tip = tip = base_sha
+    for commit in commit_order:
+        with pool.checkout(tip) as wt:
+            if not _cherry_pick(wt, commit):
+                sol.seam, sol.seam_kind = commit, "conflict"
+                break
+            new_tip = gitio.rev(wt, "HEAD")
+        if not _fully_green(cfg, commitcache.run_ladder_on_commit(repo, db, cfg, new_tip, pool)):
+            sol.seam, sol.seam_kind = commit, "test-fail"
+            break
+        tip = new_tip
+        sol.landed.append(commit)
+        sol.commits[commit] = new_tip
+        sol.staging_tip = new_tip
+        gitio.update_ref(repo, STAGING_REF, new_tip)
+    return sol
+
+
 def solve_seams(repo: Path, db, cfg, incs: list, pool: WorktreePool | None = None,
                 max_reorders: int = 8) -> Solution:
     """Wrap solve() with the seam classifier: on a red seam, try REORDER before
@@ -131,7 +208,10 @@ def solve_seams(repo: Path, db, cfg, incs: list, pool: WorktreePool | None = Non
     sol = None
     for attempt in range(max_reorders + 1):
         _reset_status(db, incs)
-        sol = solve(repo, db, cfg, incs, pool)
+        try:
+            sol = solve(repo, db, cfg, incs, pool)
+        except increments.CycleError as ce:
+            return _handle_cycle(repo, db, cfg, incs, ce.remaining, pool)
         if sol.seam is None:
             return sol
         verdict = _classify_seam(repo, db, cfg, sol, incs)
@@ -142,3 +222,17 @@ def solve_seams(repo: Path, db, cfg, incs: list, pool: WorktreePool | None = Non
             continue                       # reorder, then re-solve (before any repair)
         return sol                          # incidental / no candidate / budget spent → park
     return sol
+
+
+def _handle_cycle(repo: Path, db, cfg, incs: list, cycle_ids, pool) -> Solution:
+    """Series-level cycle in the inferred DAG: drop to commit-level interleave;
+    if still cyclic, emit split-needed and park the cyclic increments."""
+    commit_order = _commit_interleave(repo, incs, cycle_ids, increments.list_dep_edges(db))
+    if commit_order is not None:
+        return _solve_commits(repo, db, cfg, commit_order, pool)   # reducible
+    affected = sorted(cycle_ids)
+    for cid in affected:
+        increments.set_status(db, cid, "parked")
+    db.enqueue_work("split_needed", affected[0],
+                    f"series-level cycle, irreducible at commit level: {affected}")
+    return Solution(order=affected, split_needed=affected)

@@ -127,6 +127,46 @@ def test_no_classifier_defaults_to_repair(repo, db, pool):
     assert sol.seam == "x" and increments.list_dep_edges(db) == []
 
 
+# ---- Task 6: cycle handling — interleave then split-needed -----------------
+
+def test_topo_commits_orders_acyclic():
+    order = linearize._topo_commits(["a", "b", "c"], {"b": {"a"}, "c": {"b"}})
+    assert order == ["a", "b", "c"]
+
+
+def test_topo_commits_detects_cycle():
+    assert linearize._topo_commits(["a", "b"], {"a": {"b"}, "b": {"a"}}) is None
+
+
+def test_irreducible_cycle_emits_split_needed(repo, db, pool):
+    x = make_inc(repo, db, "x", "x.txt", "X\n")
+    y = make_inc(repo, db, "y", "y.txt", "Y\n")
+    increments.add_dep_edge(db, "x", "y")
+    increments.add_dep_edge(db, "y", "x")          # series-level cycle
+    sol = linearize.solve_seams(repo.path, db, cfg(), [x, y], pool)
+    assert set(sol.split_needed) == {"x", "y"}
+    assert increments.get(db, "x").status == "parked"
+    assert increments.get(db, "y").status == "parked"
+    assert any(w["kind"] == "split_needed" for w in db.pending_work())
+
+
+def test_commit_interleave_irreducible_for_single_commit_cycle(repo, db):
+    x = make_inc(repo, db, "x", "x.txt", "X\n")
+    y = make_inc(repo, db, "y", "y.txt", "Y\n")
+    edges = [{"x": "x", "y": "y"}, {"x": "y", "y": "x"}]
+    assert linearize._commit_interleave(repo.path, [x, y], {"x", "y"}, edges) is None
+
+
+def test_solve_commits_materializes_in_order(repo, db, pool):
+    # the reducible-path materializer, exercised directly on a valid acyclic order
+    a = make_inc(repo, db, "a", "a.txt", "A\n")
+    b = make_inc(repo, db, "b", "b.txt", "B\n")
+    sol = linearize._solve_commits(repo.path, db, cfg(),
+                                   [a.patches["self"], b.patches["self"]], pool)
+    assert sol.seam is None and len(sol.landed) == 2
+    assert gitio.read_ref(repo.path, linearize.STAGING_REF) == sol.staging_tip
+
+
 def test_zero_llm_calls_on_clean_solve(repo, db, pool, tmp_path):
     # a configured audit_cmd that records if invoked; a clean solve must not call it.
     marker = tmp_path / "llm-called"
