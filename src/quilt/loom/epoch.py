@@ -51,3 +51,16 @@ def mint(db, incs) -> int:
 def accept(db, epoch) -> bool:
     """True iff *epoch* is still the current epoch (the plan has not reflowed)."""
     return int(epoch) == current(db)
+
+
+def roll(db) -> int:
+    """Force an epoch boundary for a reason orthogonal to the increment set —
+    e.g. a regression-lock harvest changed the base tree (§6.3), invalidating the
+    combination cache. Bumps the counter once and stales the set-hash baseline so
+    the next `mint` re-rolls (the next plan is genuinely new on the new base).
+    Callers batch base-changing lands behind a single `roll`, never dribble."""
+    cur = current(db) + 1
+    _set(db, _EPOCH_KEY, cur)
+    db.conn.execute("DELETE FROM loom_meta WHERE key=?", (_SETHASH_KEY,))
+    db.conn.commit()
+    return cur
