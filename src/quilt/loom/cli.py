@@ -4,10 +4,12 @@ P3 wires `promote` (FF + milestone stress) and `propose-push` (the hard safety
 gate). Global flags mirror quilt: --repo, --config, --db.
 """
 import argparse
+import tomllib
 from pathlib import Path
 
 from .. import gates as gates_mod
 from ..db import DB
+from . import harvest, pipeline
 from . import promote as promote_mod
 from . import pushgate, schema
 
@@ -28,6 +30,8 @@ def main(argv=None):
     ap.add_argument("--db", default=None)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    pr = sub.add_parser("run", help="single-branch end-to-end: harvest→stage→promote")
+    pr.add_argument("--branch", required=True)
     sub.add_parser("promote", help="FF next_staging to a stress-validated milestone")
     pp = sub.add_parser("propose-push", help="surface a push proposal (never pushes)")
     pp.add_argument("remote")
@@ -37,10 +41,29 @@ def main(argv=None):
     args = ap.parse_args(argv)
     repo, cfg, db = _open(args)
 
-    if args.cmd == "promote":
+    if args.cmd == "run":
+        _run(repo, cfg, db, args)
+    elif args.cmd == "promote":
         _promote(repo, cfg, db)
     elif args.cmd == "propose-push":
         _propose_push(repo, cfg, args)
+
+
+def _run(repo, cfg, db, args) -> None:
+    raw = tomllib.loads(Path(args.config).read_text())
+    test_globs = raw.get("harvest", {}).get("test_globs", harvest.DEFAULT_TEST_GLOBS)
+    res = pipeline.run(repo, db, cfg, args.branch, test_globs)
+    sol = res["solution"]
+    print(f"run: harvested {len(res['lifted'])} test commit(s); "
+          f"staging landed {len(sol.landed)} increment(s)"
+          + (f", seam at {sol.seam}" if sol.seam else ""))
+    promo = res["promotion"]
+    if promo is None:
+        print("run: nothing to promote")
+    elif promo["promoted"]:
+        print(f"run: next_staging advanced to {promo['milestone'][:12]}")
+    else:
+        print(f"run: stress held the floor on {promo['milestone'][:12]}")
 
 
 def _promote(repo, cfg, db) -> None:
