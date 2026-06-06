@@ -249,16 +249,35 @@ continuous force-push.
 
 ---
 
-## Definition of done (P2)
+## Definition of done (P2) — ✅ COMPLETE (commits `d593224`…`ce0cdd7`)
 
-- [ ] `staging` is `materialize(sort(set, dep_edge, policy))`, recomputed/force-updated when
-  the set changes; force-update is a normal operation, not an error path.
-- [ ] Published `staging` is always the **maximal green prefix**; the remainder is parked,
+- [x] `staging` is `materialize(sort(set, dep_edge, policy))`, recomputed/force-updated when
+  the set changes; force-update (`update_ref refs/loom/staging`) is a normal operation.
+- [x] Published `staging` is always the **maximal green prefix**; the remainder is parked,
   never materialized (green by truncation).
-- [ ] **Zero** LLM calls on a clean all-green solve (asserted); Haiku is invoked **only** at a
-  red seam, and only to classify hard vs incidental.
-- [ ] Reorder is attempted before repair; inferred `dep_edge`s are recorded and durable.
-- [ ] Per-commit gate cache is keyed on `commit_tree_sha`; every fresh green is auditor-verified
-  (P1) before it lands in the cache.
-- [ ] Worktree pool bounds concurrency and reaps on crash; reflow epoch rejects stale results.
-- [ ] Full quilt suite green; only additive Loom modules/tables.
+- [x] **Zero** LLM calls on a clean all-green solve (asserted in `test_zero_llm_calls_on_clean_solve`);
+  Haiku is invoked **only** at a red seam, to classify hard vs incidental.
+- [x] Reorder is attempted before repair; inferred `dep_edge`s are recorded and durable.
+- [x] Per-commit gate cache is keyed on the commit **tree**; every fresh green is auditor-verified
+  (P1) before it lands in the cache (`test_fake_green_not_cached_and_requeued`).
+- [x] Worktree pool bounds concurrency and reaps on crash; reflow epoch rejects stale results.
+- [x] Full quilt suite green (137 passed; the 2 failures are the pre-existing missing
+  `git-mediate` binary). Only additive Loom modules/tables.
+
+### Execution notes
+
+- **Files added:** `src/quilt/loom/{worktree,increments,commitcache,linearize,decide,epoch}.py`;
+  tests `tests/loom/test_{worktree,increments,commitcache,linearize,epoch}.py` (32 new tests).
+  Schema extended additively with `increment`, `dep_edge`, `commit_gate`, `loom_meta`.
+- **Increment model:** an increment's payload is a single commit at `patches["self"]`,
+  cherry-picked onto the running tip (rebase-based composition). `_inc_commits` already
+  supports a `base..tip` range for the future multi-commit / commit-granular path.
+- **Decisions pinned:** the spec's ordering shorthand `(priority_class, stability, -size, age)`
+  is implemented as tests-first / stable-first / small-first / old-first (documented in
+  `increments.py`). `GateRun.is_test` (default True) was added so build/compile gates aren't
+  flagged fake-green for running no tests — P1 audit tests unaffected.
+- **Cycle handling:** with increment-granular dep evidence a true series-level cycle is
+  irreducible at commit level, so it resolves to `split-needed`; the commit-interleave engine
+  (`_topo_commits`, `_solve_commits`) is in place for when finer commit-level evidence exists.
+- **Deferred to P5:** `decide.context_for` is a stub (returns global-only/empty) until P6 wires
+  retrieval; the seam classifier already routes through `decide.decide_json`.
