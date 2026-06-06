@@ -118,6 +118,38 @@ def test_no_audit_cmd_fails_closed(gate_run):
     assert not v.real_green and v.inconclusive
 
 
+# ---- Task 4: gate-verification contract (void + requeue on fake-green) -----
+
+from quilt.db import DB
+
+
+def test_fake_green_voids_cache_and_requeues(gate_run, tmp_path):
+    db = DB(tmp_path / "q.sqlite3")
+    schema.apply(db.conn)
+    db.upsert_merge_point(id="mp1", base_tree_sha="bt", base_commit_sha="c1",
+                          member_patch_ids=["p1"], member_tips=["s1"],
+                          construction="clean", result_commit="rc", result_tree="rt")
+    db.record_gate("mp1", "unit", "c1", "pass")            # a (wrongly) green row
+    run = gate_run(subject_id="mp1", gate="unit", exit_code=1)   # deterministic fake
+    v = audit.verify_gate(repo=None, db=db, cfg=None, run=run)
+    assert not v.real_green
+    assert db.gate_result("mp1", "unit", "c1") == "fail"   # cache voided
+    assert db.pending_work()[0]["kind"] == "test_fail"     # re-enqueued
+
+
+def test_real_green_leaves_cache_intact(gate_run, tmp_path):
+    db = DB(tmp_path / "q.sqlite3")
+    schema.apply(db.conn)
+    db.upsert_merge_point(id="mp1", base_tree_sha="bt", base_commit_sha="c1",
+                          member_patch_ids=["p1"], member_tips=["s1"],
+                          construction="clean", result_commit="rc", result_tree="rt")
+    db.record_gate("mp1", "unit", "c1", "pass")
+    v = audit.verify_gate(repo=None, db=db, cfg=None, run=gate_run(subject_id="mp1", gate="unit"))
+    assert v.real_green
+    assert db.gate_result("mp1", "unit", "c1") == "pass"
+    assert db.pending_work() == []
+
+
 def test_happy_path_never_calls_hook(gate_run, tmp_path):
     marker = tmp_path / "called"
     stub = make_stub(tmp_path, "audit.sh",

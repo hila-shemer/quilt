@@ -163,3 +163,20 @@ def audit(run: GateRun, db, cfg, *, repo=None) -> Verdict:
              int(v.inconclusive), v.reason, int(time.time())))
         db.conn.commit()
     return v
+
+
+def verify_gate(repo, db, cfg, run: GateRun) -> Verdict:
+    """The §6.1 interface: run after a gate-ladder execution. On a fake-green,
+    void the cache entry and re-enqueue the gate so it cannot land. Returns the
+    verdict so the caller can break the ladder.
+
+    Voids quilt's per-merge-point gate cache when `run.subject_id` is a known
+    merge-point (keyed by its base commit). Loom's per-commit cache (P2) wraps
+    this and voids its own (tree_sha, gate) row."""
+    v = audit(run, db, cfg, repo=repo)
+    if not v.real_green:
+        mp = db.get_merge_point(run.subject_id)
+        if mp is not None:
+            db.record_gate(run.subject_id, run.gate, mp["base_commit_sha"], "fail")
+        db.enqueue_work("test_fail", run.subject_id, f"fake-green voided: {v.reason}")
+    return v
