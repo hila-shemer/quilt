@@ -69,10 +69,29 @@ CREATE TABLE IF NOT EXISTS loom_meta (
 );
 """
 
+# P6 (memory pipeline §4.4/§9): durable, retrievable role experience. Three
+# scopes (role-local | project-global | doctrine-upstream), recurrence as the
+# compaction/promotion signal, refs for dead-code decay detection.
+ROLE_JOURNAL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS role_journal (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  role       TEXT NOT NULL,                 -- resolver|reviewer|debugger|fixer|...
+  task_type  TEXT NOT NULL,                 -- conflict|fix-review|...
+  kind       TEXT NOT NULL,                 -- structured|narrative
+  pattern    TEXT,                          -- retrieval key (structured shape)
+  lesson     TEXT NOT NULL,                 -- text or action
+  recurrence INTEGER NOT NULL DEFAULT 1,
+  refs       TEXT NOT NULL DEFAULT '[]',    -- json [files/symbols] for decay detection
+  scope      TEXT NOT NULL,                 -- role-local|project-global|doctrine-upstream
+  created_at INTEGER NOT NULL
+);
+"""
+
 
 def apply(conn) -> None:
     conn.executescript(AUDIT_SCHEMA)
     conn.executescript(INCREMENT_SCHEMA)
     conn.executescript(COMMIT_GATE_SCHEMA)
     conn.executescript(META_SCHEMA)
+    conn.executescript(ROLE_JOURNAL_SCHEMA)
     conn.commit()
