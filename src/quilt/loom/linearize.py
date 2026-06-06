@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import gitio
-from . import commitcache, decide, increments
+from . import commitcache, decide, epoch as epoch_mod, increments
 from .worktree import WorktreePool
 
 STAGING_REF = "refs/loom/staging"
@@ -30,6 +30,7 @@ class Solution:
     seam_kind: str | None = None           # 'conflict' | 'test-fail'
     commits: dict = field(default_factory=dict)        # inc id -> landed commit sha
     split_needed: list[str] = field(default_factory=list)   # irreducible-cycle increment ids
+    epoch: int = 0                         # reflow epoch this plan was solved under
 
     def commit_of(self, inc_id: str) -> str | None:
         return self.commits.get(inc_id)
@@ -58,7 +59,7 @@ def solve(repo: Path, db, cfg, incs: list, pool: WorktreePool | None = None) -> 
     pool = pool or WorktreePool(repo, size=4)
     edges = increments.list_dep_edges(db)
     ordered = increments.order(incs, edges)
-    sol = Solution(order=[i.id for i in ordered])
+    sol = Solution(order=[i.id for i in ordered], epoch=epoch_mod.mint(db, incs))
 
     base_sha = gitio.rev(repo, cfg.base)
     gitio.update_ref(repo, STAGING_REF, base_sha)

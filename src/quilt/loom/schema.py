@@ -61,8 +61,18 @@ CREATE TABLE IF NOT EXISTS commit_gate (
 """
 
 
+# Small key/value store for Loom engine metadata (reflow epoch, §10).
+META_SCHEMA = """
+CREATE TABLE IF NOT EXISTS loom_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+"""
+
+
 def apply(conn) -> None:
     conn.executescript(AUDIT_SCHEMA)
     conn.executescript(INCREMENT_SCHEMA)
     conn.executescript(COMMIT_GATE_SCHEMA)
+    conn.executescript(META_SCHEMA)
     conn.commit()
