@@ -13,15 +13,16 @@ Loom = rebase-based orchestration layer on quilt (+ rightwayc agents). Engine is
 | Plans | all `loom-*` docs (quilt) + `loom-agents-design` / `loom-05-agents` (rightwayc) | ✅ written |
 | **P1** Test-integrity auditor (§6.1) | `loom-01-...` | ✅ **done** — `audit.py`, 15 tests |
 | **P2** Linearizer + seam-search (§6.2/§4.3/§10) | `loom-02-...` | ✅ **done** — worktree/increments/commitcache/linearize/decide/epoch, 32 tests |
-| **P3** Promotion ff+stress + push gate (§6.6/§6.7) | `loom-03-...` | ⬜ next |
-| P4 single-branch path (§6.3/§6.8) | `loom-04-...` | ⬜ |
+| **P3** Promotion ff+stress + push gate (§6.6/§6.7) | `loom-03-...` | ✅ **done** — milestone/promote/pushgate/cli, 18 tests |
+| P4 single-branch path (§6.3/§6.8) | `loom-04-...` | ⬜ next |
 | P5 agent loops (§8) — **rightwayc** | `rightwayc/.../loom-05-agents.md` | ⬜ |
 | P6 memory pipeline (§9) | `loom-06-...` | ⬜ |
 | P7 maintainer/zoo/port-forward (§6.4/§6.5) | `loom-07-...` | ⬜ |
 | P8 cross-repo coordination (§6.10) | `loom-08-...` | ⬜ |
 
-**Suite:** 137 passed; the only reds are 2 pre-existing failures from the missing
-`git-mediate` binary (unrelated to Loom). Loom test count: 47.
+**Suite:** 157 passed (this host has `git-mediate` installed, so the 2 pre-existing
+`git-mediate` reds pass here; in a container lacking it they remain the only reds,
+unrelated to Loom). Loom test count: 65.
 
 ## Modules built (`src/quilt/loom/`)
 
@@ -30,7 +31,11 @@ Loom = rebase-based orchestration layer on quilt (+ rightwayc agents). Engine is
 `order()`) · `commitcache.py` (per-commit tree-keyed cache + audited runner) ·
 `linearize.py` (`solve` / `solve_seams`, maximal-green-prefix, reorder-before-repair,
 cycle→split-needed) · `decide.py` (universal LLM wrapper; `context_for` is a stub until P6) ·
-`epoch.py` (reflow guard) · `cli.py` (stub).
+`epoch.py` (reflow guard) · `milestone.py` (per-increment tips + mutable suffix/frozen
+floor) · `promote.py` (FF-from-staging + milestone stress; FF-only refuses rewrite) ·
+`pushgate.py` (propose-push hard safety gate — never pushes, hila-shemer/not-Majestic
+URL rule mirroring rightwayc `green_verify.py`, patch artifacts on block) ·
+`cli.py` (`loom promote`, `loom propose-push`).
 
 ## Env setup (do this first in a fresh container)
 
@@ -55,8 +60,23 @@ git config --global commit.gpgsign false                            # signing se
 - **Safety:** no component pushes a remote (P3 propose-push gate reuses rightwayc
   `tools/mergeq/green_verify.py` for the `hila-shemer`/not-`Majestic` URL rule).
 
-## Next: P3
+## Next: P4 — single-branch path end-to-end (§6.3/§6.8)
 
-Consume `refs/loom/staging` + the per-commit cache (FF preserves commit identity → cache hot;
-only the `long` gate is new work). Build `milestone.py`, `promote.py`, `pushgate.py` per
-`loom-03-...`. Confirm milestone spacing (spec §13) before shipping.
+Close the first no-agent slice: harvest (§6.3) → linearize (P2) → stage → promote (P3),
+with the coverage gate (§6.8) wired as a ladder rung. Build `harvest.py`, `coverage.py`,
+`pipeline.py` per `loom-04-...`; add `loom run --branch <b>`. Reuse the P2 reflow epoch to
+**batch** base-changing harvests (never dribble). Whole clean path must be **zero-LLM**.
+
+### P3 notes (for the next worker)
+- `promote.run` advances **one milestone at a time** (lowest milestone strictly above the
+  floor), via `commitcache` so only the new `long`/stress gate is marginal work; FF-only,
+  `NonFastForward` guards the frozen floor. Stress config lives at `cfg.promotion["stress"]`
+  (a full gate dict: `{name, cmd, test, expected?}`); default `{name:"long", cmd:"true",
+  test:False}`.
+- Milestone spacing (spec §13): default = tip of each absorbed increment. In the
+  single-commit-per-increment model `solve()` produces, that is one milestone per staging
+  commit; `milestone.milestones()` already chunks by per-increment commit count so a future
+  multi-commit increment collapses to a single tip milestone.
+- `pushgate.propose` is the **only** push surface and contains no `git push`. Block path:
+  raise `PushBlocked` without `outdir`, or emit `.patch` artifacts + return a blocked proposal
+  with `outdir`. `refs/loom/staging` raises `NotPushable` first, unconditionally.
