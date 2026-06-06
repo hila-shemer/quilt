@@ -16,13 +16,13 @@ Loom = rebase-based orchestration layer on quilt (+ rightwayc agents). Engine is
 | **P3** Promotion ff+stress + push gate (§6.6/§6.7) | `loom-03-...` | ✅ **done** — milestone/promote/pushgate/cli, 18 tests |
 | **P4** single-branch path (§6.3/§6.8) | `loom-04-...` | ✅ **done** — harvest/coverage/pipeline + `loom run`, 16 tests |
 | P5 agent loops (§8) — **rightwayc** | `rightwayc/.../loom-05-agents.md` | ⬜ next |
-| P6 memory pipeline (§9) | `loom-06-...` | ⬜ |
-| P7 maintainer/zoo/port-forward (§6.4/§6.5) | `loom-07-...` | ⬜ |
+| **P6** memory pipeline (§9) | `loom-06-...` | ✅ **done** — journal/retrieve/compact/promote_lesson, 25 tests |
+| P7 maintainer/zoo/port-forward (§6.4/§6.5) | `loom-07-...` | ⬜ next |
 | P8 cross-repo coordination (§6.10) | `loom-08-...` | ⬜ |
 
-**Suite:** 173 passed (this host has `git-mediate` installed, so the 2 pre-existing
+**Suite:** 198 passed (this host has `git-mediate` installed, so the 2 pre-existing
 `git-mediate` reds pass here; in a container lacking it they remain the only reds,
-unrelated to Loom). Loom test count: 81.
+unrelated to Loom). Loom test count: 106.
 
 ## Modules built (`src/quilt/loom/`)
 
@@ -39,7 +39,12 @@ URL rule mirroring rightwayc `green_verify.py`, patch artifacts on block) ·
 `epoch.roll` per pass, rebases donor) · `coverage.py` (coverage-bar gate +
 `certify_edges` writing `dep_edge.witnessed`) · `pipeline.py` (single-branch
 harvest→linearize→promote driver) · `cli.py` (`loom run`, `loom promote`,
-`loom propose-push`).
+`loom propose-push`) · `journal.py` (role_journal store + scope tagging) ·
+`retrieve.py` (§9.2 relevance retrieval — global always-in + role-local top-K;
+now backs `decide.context_for`, closing the P2 stub) · `compact.py` (nightly
+dedup/decay deterministic + Haiku-only contradiction supersede) ·
+`promote_lesson.py` (cross-role→global promotion + doctrine leak gate — sanitize,
+deterministic denylist re-check, stage artifact, never push).
 
 ## Env setup (do this first in a fresh container)
 
@@ -64,12 +69,35 @@ git config --global commit.gpgsign false                            # signing se
 - **Safety:** no component pushes a remote (P3 propose-push gate reuses rightwayc
   `tools/mergeq/green_verify.py` for the `hila-shemer`/not-`Majestic` URL rule).
 
-## Next: P5 — agent loops (§8) — **in the rightwayc repo**
+## Next: P7 — maintainer loop / zoo / port-forward (§6.4/§6.5), in quilt
 
-P5 lives in `rightwayc` (`.../loom-05-agents.md`), not quilt: the builder/debugger/seam
-agents that plug into this same loop. The quilt engine they drive is now complete through
-the single-branch path — agents enqueue/consume `work_queue` items (`test_fail`, `conflict`,
-`split_needed`, `coverage_fail`) and call into `pipeline`/`linearize`/`promote`.
+Build `loom-07-...`: the maintainer loop rebases each zoo singleton onto the moving `next`,
+runs its DoD gates, updates its tip in quilt's `branches` on success, and routes
+conflict/red into the loop (delegating conflicts to promotion §6.6). Compositions stay
+on-demand (rebase Y onto `next_X`), never enumerated beyond quilt's N≤5 window. Port-forward
+(§6.5) is the cross-language/cross-project rebase (LLM: Opus) — gate it behind the
+propose-push rules like every external surface.
+
+**Also still open:** **P5 — agent loops (§8) lives in the `rightwayc` repo**
+(`.../loom-05-agents.md`), not quilt: the builder/debugger/seam agents that drive this
+engine. The quilt engine is complete through the single-branch path **and** the memory
+pipeline (P6) — agents enqueue/consume `work_queue` items (`test_fail`, `conflict`,
+`split_needed`, `coverage_fail`), call into `pipeline`/`linearize`/`promote`, and write/read
+the `role_journal` via `journal`/`retrieve` (already wired into every `decide` call). P8
+(cross-repo coordination §6.10) remains after that.
+
+### P6 notes (for the next worker)
+- **`decide.context_for` is now real** (delegates to `retrieve.context_for`): every LLM hook
+  gets all `project-global` lessons + relevance-ranked top-K `role-local` (token-overlap over
+  `pattern`+`refs` vs the prompt/files; dependency-free — embedding model is a flagged
+  sub-decision). Budget is `budget_words` (default 500 ≈ 2k tokens); globals always in.
+- **Memory cadences are callable, scheduling is external:** `compact.run_all(db, repo, cfg)`
+  (nightly, per role) and `promote_lesson.promote_cross_role(db)` (weekly/threshold). Wire to
+  cron/`loom` CLI when convenient — no quilt scheduler edit was made.
+- **Leak gate fails closed:** `promote_lesson.stage_doctrine` raises `LeakBlocked` if no
+  generic form or any `DENYLIST` token (`majestic`, `hila-shemer`) survives; it only writes a
+  patch artifact + a `doctrine-upstream` journal row — **no push** (extend `DENYLIST` as new
+  project-internal names appear).
 
 ### P4 notes (for the next worker)
 - **Harvest integrates by advancing the `cfg.base` ref itself** (the local `next` trunk);
