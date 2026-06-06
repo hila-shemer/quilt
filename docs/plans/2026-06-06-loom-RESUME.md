@@ -14,15 +14,15 @@ Loom = rebase-based orchestration layer on quilt (+ rightwayc agents). Engine is
 | **P1** Test-integrity auditor (§6.1) | `loom-01-...` | ✅ **done** — `audit.py`, 15 tests |
 | **P2** Linearizer + seam-search (§6.2/§4.3/§10) | `loom-02-...` | ✅ **done** — worktree/increments/commitcache/linearize/decide/epoch, 32 tests |
 | **P3** Promotion ff+stress + push gate (§6.6/§6.7) | `loom-03-...` | ✅ **done** — milestone/promote/pushgate/cli, 18 tests |
-| P4 single-branch path (§6.3/§6.8) | `loom-04-...` | ⬜ next |
-| P5 agent loops (§8) — **rightwayc** | `rightwayc/.../loom-05-agents.md` | ⬜ |
+| **P4** single-branch path (§6.3/§6.8) | `loom-04-...` | ✅ **done** — harvest/coverage/pipeline + `loom run`, 16 tests |
+| P5 agent loops (§8) — **rightwayc** | `rightwayc/.../loom-05-agents.md` | ⬜ next |
 | P6 memory pipeline (§9) | `loom-06-...` | ⬜ |
 | P7 maintainer/zoo/port-forward (§6.4/§6.5) | `loom-07-...` | ⬜ |
 | P8 cross-repo coordination (§6.10) | `loom-08-...` | ⬜ |
 
-**Suite:** 157 passed (this host has `git-mediate` installed, so the 2 pre-existing
+**Suite:** 173 passed (this host has `git-mediate` installed, so the 2 pre-existing
 `git-mediate` reds pass here; in a container lacking it they remain the only reds,
-unrelated to Loom). Loom test count: 65.
+unrelated to Loom). Loom test count: 81.
 
 ## Modules built (`src/quilt/loom/`)
 
@@ -35,7 +35,11 @@ cycle→split-needed) · `decide.py` (universal LLM wrapper; `context_for` is a 
 floor) · `promote.py` (FF-from-staging + milestone stress; FF-only refuses rewrite) ·
 `pushgate.py` (propose-push hard safety gate — never pushes, hila-shemer/not-Majestic
 URL rule mirroring rightwayc `green_verify.py`, patch artifacts on block) ·
-`cli.py` (`loom promote`, `loom propose-push`).
+`harvest.py` (regression-lock harvest — lifts test-only commits to base, one
+`epoch.roll` per pass, rebases donor) · `coverage.py` (coverage-bar gate +
+`certify_edges` writing `dep_edge.witnessed`) · `pipeline.py` (single-branch
+harvest→linearize→promote driver) · `cli.py` (`loom run`, `loom promote`,
+`loom propose-push`).
 
 ## Env setup (do this first in a fresh container)
 
@@ -60,14 +64,29 @@ git config --global commit.gpgsign false                            # signing se
 - **Safety:** no component pushes a remote (P3 propose-push gate reuses rightwayc
   `tools/mergeq/green_verify.py` for the `hila-shemer`/not-`Majestic` URL rule).
 
-## Next: P4 — single-branch path end-to-end (§6.3/§6.8)
+## Next: P5 — agent loops (§8) — **in the rightwayc repo**
 
-Close the first no-agent slice: harvest (§6.3) → linearize (P2) → stage → promote (P3),
-with the coverage gate (§6.8) wired as a ladder rung. Build `harvest.py`, `coverage.py`,
-`pipeline.py` per `loom-04-...`; add `loom run --branch <b>`. Reuse the P2 reflow epoch to
-**batch** base-changing harvests (never dribble). Whole clean path must be **zero-LLM**.
+P5 lives in `rightwayc` (`.../loom-05-agents.md`), not quilt: the builder/debugger/seam
+agents that plug into this same loop. The quilt engine they drive is now complete through
+the single-branch path — agents enqueue/consume `work_queue` items (`test_fail`, `conflict`,
+`split_needed`, `coverage_fail`) and call into `pipeline`/`linearize`/`promote`.
 
-### P3 notes (for the next worker)
+### P4 notes (for the next worker)
+- **Harvest integrates by advancing the `cfg.base` ref itself** (the local `next` trunk);
+  `linearize.solve` reads `cfg.base`, so no P2 edit was needed. `harvest.run` returns lifted
+  base shas, calls `epoch.roll(db)` **once** per pass (base-tree change → cache invalidation,
+  batched), and rebases the donor via worktree cherry-pick (lifted commits drop out by
+  patch-id). `test_globs` is a `run()` arg (default `harvest.DEFAULT_TEST_GLOBS`); the CLI
+  reads `[harvest] test_globs` straight from the toml (load_config doesn't carry it — no
+  Config change).
+- **Coverage is two jobs:** `coverage.gate` (bar rung; enqueues `coverage_fail`, does NOT go
+  through the test-summary auditor — it's a measurement gate) and `coverage.certify_edges`
+  (writes `dep_edge.witnessed`; witnessing paths come from `dep_edge.evidence` — a path-list
+  or path-like tokens; free-text evidence → unwitnessed, P2 must not trust it for reorder).
+- **`pipeline.run`** = harvest → make one increment per remaining branch commit → `solve` →
+  `promote`. Clean path is zero-LLM (asserted via a marker stub on `audit_cmd`/`seam_cmd`).
+
+### P3 notes
 - `promote.run` advances **one milestone at a time** (lowest milestone strictly above the
   floor), via `commitcache` so only the new `long`/stress gate is marginal work; FF-only,
   `NonFastForward` guards the frozen floor. Stress config lives at `cfg.promotion["stress"]`
