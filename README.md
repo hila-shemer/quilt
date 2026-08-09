@@ -73,8 +73,12 @@ where the merged result is checked out.
 | Command | Description |
 |---|---|
 | `quilt tick` | Advance the pipeline one step (probe + gate ladder). |
-| `quilt status` | Show each merge-point and its highest passing gate. |
-| `quilt queue` | Show pending work items (conflicts, test failures). |
+| `quilt status` | Show each merge-point — member branches, highest passing gate, failing gate — and the idle predicate. |
+| `quilt idle` | Exit 0 iff nothing will change without new tips or drained items. Scriptable wait condition. |
+| `quilt queue [--lines N] [--full] [--state S\|all]` | Pending work items: member branches, gate, exit code, and a failure-first excerpt of the log. |
+| `quilt show <work-id>` | The complete stored detail for one work item. |
+| `quilt dismiss <work-id> --reason <text>` | Retire an item whose failure was the gate environment's fault. No poison, no attribution. |
+| `quilt requeue <work-id>` | Return an item to the queue (undo a triage, a deferral, or a dismissal). |
 | `quilt promote <target>` | Promote the best ready candidate to `refs/quilt/target/<target>`. |
 | `quilt poison <prefix>` | Mark a merge-point poisoned and cascade-evict all supersets. |
 | `quilt triage` | Classify queued work via the cheap model; route trivial/moderate → agent, complex → deferred. |
@@ -86,6 +90,24 @@ where the merged result is checked out.
 
 All commands accept `--repo <path>` (default: `.`) and `--config <path>`
 (default: `quilt.toml`).
+
+### Reading a failure
+
+`quilt queue` is the whole path — `.quilt.sqlite3` is state, not an interface.
+Each item prints which branches it is about, which gate failed with what exit
+code, and an excerpt chosen failure-first: lines matching FAIL/ERROR/assert win
+the budget, `ok:` lines never do, and omissions are marked so you know it is an
+excerpt. `quilt show <id>` prints the log entire.
+
+A gate's stdout and stderr share one pipe, so the stored detail is in the
+child's own write order. (That means a build system's parting "Build completed
+successfully" can still land last on a failing gate — it really was written
+last; the excerpt shows you the failure regardless.)
+
+When the failure is the gate's own fault — a missing dependency path, a
+misconfigured runner — `quilt dismiss <id> --reason ...` retires it without a
+verdict. The gate result stays `fail`, so the next tick re-runs it and the item
+comes back if the environment is still broken.
 
 ### Gate ladder notes
 
