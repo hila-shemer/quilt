@@ -86,3 +86,12 @@ def test_reprobe_does_not_clobber_agent_resolution(repo_with_branches, db):
     assert by_members2[("feat-conflict",)]["construction"] == "agent"
     # pinned ref still intact
     assert resolve.reusable_resolution(r.path, db, conflict_id) == dummy_commit
+
+
+def test_probe_records_member_branch_names(repo_with_branches, db):
+    """A merge-point knows which branches it is about — no join required."""
+    results = probe.probe_all(repo_with_branches.path, "main",
+                              ["feat-clean", "feat-conflict"], db)
+    pair = next(r for r in results if len(r["branches"]) == 2)
+    mp = db.get_merge_point(pair["id"])
+    assert mp["member_branches"] == ["feat-clean", "feat-conflict"]

@@ -1,5 +1,6 @@
 """Configurable monotone gate ladder; results keyed by base commit (staleness =
 absence of a row for the current base)."""
+import os
 import subprocess
 import tempfile
 import tomllib
@@ -7,6 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import gitio
+
+# How much of a failing gate's output to keep. The tail is what matters, so an
+# over-long log loses its head — at a line boundary, and it says so.
+MAX_DETAIL_BYTES = 512 * 1024
 
 
 @dataclass
@@ -28,6 +33,31 @@ def load_config(path: Path) -> Config:
     return Config(base=raw["quilt"]["base"], branches=raw["quilt"]["branches"],
                   gates=raw.get("gate", []), targets=raw.get("targets", {}),
                   llm=raw.get("llm", {}), promotion=raw.get("promotion", {}))
+
+
+def _clip(text: str) -> str:
+    """Trim to MAX_DETAIL_BYTES from the end, never mid-line."""
+    if len(text) <= MAX_DETAIL_BYTES:
+        return text
+    tail = text[-MAX_DETAIL_BYTES:]
+    nl = tail.find("\n")
+    if nl != -1:
+        tail = tail[nl + 1:]
+    return (f"… ({len(text) - len(tail)} bytes truncated; showing the tail)\n"
+            + tail)
+
+
+def run_gate_cmd(cmd: str, workdir: str) -> subprocess.CompletedProcess:
+    """Run one gate command with stdout and stderr sharing a single pipe.
+
+    Two streams captured apart and concatenated do not reconstruct into a log:
+    the build system's parting 'Build completed successfully' ends up after the
+    test failure it preceded, and the tail of the record contradicts the
+    verdict. One pipe keeps the child's own write order.
+    """
+    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    return subprocess.run(cmd, shell=True, cwd=workdir, env=env, text=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
 
 def run_ladder(repo: Path, db, cfg: Config, mp_id: str) -> str | None:
@@ -59,15 +89,15 @@ def run_ladder(repo: Path, db, cfg: Config, mp_id: str) -> str | None:
                 if long_gate:
                     db.set_validation(mp_id, "inflight")
                 cmd = gate["cmd"].replace("{workdir}", wt)
-                proc = subprocess.run(cmd, shell=True, cwd=wt,
-                                      capture_output=True, text=True)
+                proc = run_gate_cmd(cmd, wt)
                 status = "pass" if proc.returncode == 0 else "fail"
                 db.record_gate(mp_id, gate["name"], base, status)
                 if status == "fail":
                     if long_gate:
                         db.set_validation(mp_id, "untested")
-                    db.enqueue_work("test_fail", mp_id,
-                                    f"{gate['name']}: {proc.stdout[-1000:]}{proc.stderr[-1000:]}")
+                    db.enqueue_work("test_fail", mp_id, _clip(proc.stdout),
+                                    gate=gate["name"],
+                                    exit_code=proc.returncode)
                     break
                 if long_gate:
                     db.set_validation(mp_id, "validated")

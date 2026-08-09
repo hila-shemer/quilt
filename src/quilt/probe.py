@@ -61,6 +61,7 @@ def probe_all(repo: Path, base: str, branches: list[str], db) -> list[dict]:
             id=mp_id, base_tree_sha=base_tree, base_commit_sha=base_commit,
             member_patch_ids=member_pids,
             member_tips=[gitio.rev(repo, b) for b in combo],
+            member_branches=list(combo),
             construction=construction, result_commit=commit, result_tree=tree)
         if commit:
             gitio.update_ref(repo, f"refs/quilt/{mp_id}", commit)

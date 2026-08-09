@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS merge_point (
   base_commit_sha  TEXT NOT NULL,
   member_patch_ids TEXT NOT NULL,
   member_tips      TEXT NOT NULL,
+  member_branches  TEXT,
   result_commit    TEXT,
   result_tree      TEXT,
   construction     TEXT NOT NULL,
@@ -49,7 +50,10 @@ CREATE TABLE IF NOT EXISTS work_queue (
   kind       TEXT NOT NULL,         -- conflict | test_fail
   target_id  TEXT NOT NULL,
   detail     TEXT,
-  state      TEXT NOT NULL DEFAULT 'queued',  -- queued | triaged | deferred | done | dropped
+  gate       TEXT,                  -- which gate produced it (test_fail)
+  exit_code  INTEGER,
+  dismiss_reason TEXT,
+  state      TEXT NOT NULL DEFAULT 'queued',  -- queued | triaged | deferred | done | dropped | dismissed
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS candidate (
@@ -63,28 +67,53 @@ CREATE TABLE IF NOT EXISTS candidate (
 """
 
 
+# Columns added after the first release. SCHEMA only runs CREATE TABLE IF NOT
+# EXISTS, so an existing .quilt.sqlite3 never sees them without this.
+ADDED_COLUMNS = [
+    ("merge_point", "member_branches", "TEXT"),
+    ("work_queue", "gate", "TEXT"),
+    ("work_queue", "exit_code", "INTEGER"),
+    ("work_queue", "dismiss_reason", "TEXT"),
+]
+
+
 class DB:
     def __init__(self, path: Path):
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self):
+        for table, column, decl in ADDED_COLUMNS:
+            have = {r["name"] for r in
+                    self.conn.execute(f"PRAGMA table_info({table})")}
+            if column not in have:
+                self.conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        self.conn.commit()
 
     def upsert_merge_point(self, *, id, base_tree_sha, base_commit_sha,
                            member_patch_ids, member_tips, construction,
-                           result_commit=None, result_tree=None):
+                           result_commit=None, result_tree=None,
+                           member_branches=None):
         self.conn.execute(
             """INSERT INTO merge_point (id, base_tree_sha, base_commit_sha,
-                 member_patch_ids, member_tips, result_commit, result_tree,
-                 construction, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?)
+                 member_patch_ids, member_tips, member_branches, result_commit,
+                 result_tree, construction, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                  base_commit_sha=excluded.base_commit_sha,
                  member_tips=excluded.member_tips,
+                 -- resolve/agent re-upsert without names; don't lose them
+                 member_branches=COALESCE(excluded.member_branches,
+                                          merge_point.member_branches),
                  result_commit=excluded.result_commit,
                  result_tree=excluded.result_tree,
                  construction=excluded.construction""",
             (id, base_tree_sha, base_commit_sha,
              json.dumps(sorted(member_patch_ids)), json.dumps(member_tips),
+             json.dumps(member_branches) if member_branches else None,
              result_commit, result_tree, construction, int(time.time())))
         self.conn.commit()
 
@@ -95,6 +124,8 @@ class DB:
         d = dict(row)
         d["member_patch_ids"] = json.loads(d["member_patch_ids"])
         d["member_tips"] = json.loads(d["member_tips"])
+        d["member_branches"] = (json.loads(d["member_branches"])
+                                if d["member_branches"] else None)
         return d
 
     def list_merge_points(self, base_tree_sha=None):
@@ -119,6 +150,18 @@ class DB:
             "SELECT status FROM gate_status WHERE merge_point_id=? AND gate=? AND base_commit_sha=?",
             (mp_id, gate, base_sha)).fetchone()
         return row["status"] if row else None
+
+    def failed_gate(self, mp_id, base_sha, ladder):
+        """First gate in the ladder recorded as failed, or None.
+
+        A merge-point whose gate ran and failed is *failed*, whatever its
+        validation_state says — that field tracks heavy-slot scheduling, and
+        reading it as a verdict reports a finished failure as untested.
+        """
+        for gate in ladder:
+            if self.gate_result(mp_id, gate, base_sha) == "fail":
+                return gate
+        return None
 
     def highest_gate(self, mp_id, base_sha, ladder):
         highest = None
@@ -146,15 +189,16 @@ class DB:
         self.conn.commit()
         return cascade_ids
 
-    def enqueue_work(self, kind, target_id, detail=""):
+    def enqueue_work(self, kind, target_id, detail="", gate=None, exit_code=None):
         existing = self.conn.execute(
             "SELECT 1 FROM work_queue WHERE kind=? AND target_id=? AND state='queued'",
             (kind, target_id)).fetchone()
         if existing:
             return
         self.conn.execute(
-            "INSERT INTO work_queue (kind, target_id, detail, created_at) VALUES (?,?,?,?)",
-            (kind, target_id, detail, int(time.time())))
+            """INSERT INTO work_queue (kind, target_id, detail, gate, exit_code,
+                 created_at) VALUES (?,?,?,?,?,?)""",
+            (kind, target_id, detail, gate, exit_code, int(time.time())))
         self.conn.commit()
 
     def find_merge_point(self, prefix: str) -> list[str]:
@@ -172,6 +216,37 @@ class DB:
         self.conn.execute("UPDATE work_queue SET state=? WHERE id=?",
                           (state, work_id))
         self.conn.commit()
+
+    def get_work(self, work_id):
+        row = self.conn.execute("SELECT * FROM work_queue WHERE id=?",
+                                (work_id,)).fetchone()
+        return dict(row) if row else None
+
+    def dismiss_work(self, work_id, reason):
+        """Retire an item without a verdict: no poison, no attribution.
+
+        For failures that are the gate's own fault. The gate result stays
+        'fail', so the next tick re-runs it and enqueues afresh if the
+        environment is still broken.
+        """
+        self.conn.execute(
+            "UPDATE work_queue SET state='dismissed', dismiss_reason=? WHERE id=?",
+            (reason, work_id))
+        self.conn.commit()
+
+    # Items that are still somebody's to drain — the queue's own backlog, as
+    # opposed to work the scheduler will pick up unprompted.
+    OPEN_STATES = ("queued", "triaged", "deferred")
+
+    def open_work(self, target_id):
+        rows = self.conn.execute(
+            "SELECT * FROM work_queue WHERE target_id=? AND state IN (?,?,?)",
+            (target_id, *self.OPEN_STATES)).fetchall()
+        return [dict(r) for r in rows]
+
+    def all_work(self):
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM work_queue ORDER BY id")]
 
     def work_by_state(self, state, kind=None):
         q, args = "SELECT * FROM work_queue WHERE state=?", [state]

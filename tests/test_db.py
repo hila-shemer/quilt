@@ -102,3 +102,21 @@ def test_candidate_roundtrip(db):
     assert db.active_candidate("other") is None
     db.set_candidate_state(cand_id, "promoted")
     assert db.active_candidate("main") is None
+
+
+def test_opening_a_pre_migration_db_adds_the_new_columns(tmp_path):
+    """An existing .quilt.sqlite3 must survive an upgrade of quilt itself."""
+    path = tmp_path / "old.sqlite3"
+    db = DB(path)
+    db.conn.execute("ALTER TABLE work_queue DROP COLUMN gate")
+    db.conn.execute("ALTER TABLE merge_point DROP COLUMN member_branches")
+    db.conn.commit()
+    db.conn.close()
+
+    reopened = DB(path)
+    work_cols = {r["name"] for r in
+                 reopened.conn.execute("PRAGMA table_info(work_queue)")}
+    mp_cols = {r["name"] for r in
+               reopened.conn.execute("PRAGMA table_info(merge_point)")}
+    assert "gate" in work_cols
+    assert "member_branches" in mp_cols

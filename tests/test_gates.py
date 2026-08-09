@@ -101,6 +101,79 @@ def test_run_ladder_skips_worktree_when_all_cached(repo_with_branches, db, cfg, 
     assert worktree_calls == [], "worktree should not be created when all gates are cached"
 
 
+# ---------------------------------------------------------------------------
+# Failure capture: the stored detail is the evidence, so it has to be faithful
+# ---------------------------------------------------------------------------
+
+CFG_CAPTURE = """
+[quilt]
+base = "main"
+branches = ["feat-clean"]
+
+[[gate]]
+name = "tests"
+cmd = '{cmd}'
+
+[targets]
+next = "tests"
+"""
+
+
+@pytest.fixture
+def capture_cfg(tmp_path):
+    def make(cmd):
+        p = tmp_path / "capture.toml"
+        p.write_text(CFG_CAPTURE.replace("{cmd}", cmd))
+        return gates.load_config(p)
+    return make
+
+
+def _fail_item(repo, db, cfg):
+    [mp] = probe.probe_all(repo.path, "main", ["feat-clean"], db)
+    gates.run_ladder(repo.path, db, cfg, mp["id"])
+    [item] = db.pending_work()
+    return item
+
+
+def test_test_fail_records_gate_name_and_exit_code(repo_with_branches, db, capture_cfg):
+    item = _fail_item(repo_with_branches, db, capture_cfg("exit 3"))
+    assert item["gate"] == "tests"
+    assert item["exit_code"] == 3
+
+
+def test_gate_detail_preserves_write_order_across_streams(repo_with_branches, db,
+                                                          capture_cfg):
+    """stderr and stdout land in one stream, so the tail is the real tail.
+
+    Capturing them separately and concatenating puts a build system's cheerful
+    stderr epilogue after the failure it is supposed to follow.
+    """
+    cmd = 'echo "FAIL: replay pair" >&2; echo "Build completed successfully"; exit 1'
+    item = _fail_item(repo_with_branches, db, capture_cfg(cmd))
+    assert item["detail"].splitlines() == [
+        "FAIL: replay pair", "Build completed successfully"]
+
+
+def test_gate_detail_keeps_the_whole_log(repo_with_branches, db, capture_cfg):
+    """No 1000-char amputation: `quilt show` has nothing to show otherwise."""
+    cmd = "for i in $(seq 0 4999); do echo \"line $i\"; done; exit 1"
+    item = _fail_item(repo_with_branches, db, capture_cfg(cmd))
+    lines = item["detail"].splitlines()
+    assert lines[0] == "line 0"
+    assert lines[-1] == "line 4999"
+
+
+def test_oversized_gate_detail_is_cut_at_a_line_boundary(repo_with_branches, db,
+                                                         capture_cfg, monkeypatch):
+    monkeypatch.setattr(gates, "MAX_DETAIL_BYTES", 200)
+    cmd = "for i in $(seq 0 999); do echo \"line $i\"; done; exit 1"
+    item = _fail_item(repo_with_branches, db, capture_cfg(cmd))
+    lines = item["detail"].splitlines()
+    assert "truncated" in lines[0]
+    assert lines[1].startswith("line ")      # a whole line, never a fragment
+    assert lines[-1] == "line 999"           # the tail survives, not the head
+
+
 CFG_FULL = """
 [quilt]
 base = "main"
