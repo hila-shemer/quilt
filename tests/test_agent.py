@@ -251,3 +251,23 @@ diagnose_cmd = "{stub}"
     out = capsys.readouterr().out
     assert "diagnosed=1" in out
     assert "resolution" in out
+
+
+ECHO_PROMPT_STUB = ('#!/bin/sh\ncat > "$(dirname "$0")/prompt.txt"\n'
+    'echo \'{"attribution": "member", "culprit": "abc123", "reason": "x"}\'\n')
+
+
+def test_diagnose_prompt_names_the_gate_and_branches(tmp_path, failed_item):
+    """The gate name and the member branches used to reach the diagnosing agent
+    only by accident, glued onto the head of the detail blob."""
+    r, db, item, single_id, _ = failed_item
+    db.conn.execute("UPDATE work_queue SET gate='tests', exit_code=2 WHERE id=?",
+                    (item["id"],))
+    db.conn.commit()
+    item = db.get_work(item["id"])
+    cfg = _diag_cfg(tmp_path, make_stub(tmp_path, "d.sh", ECHO_PROMPT_STUB))
+    assert agent.diagnose_failure(r.path, db, cfg, item) is not None
+    prompt = (tmp_path / "prompt.txt").read_text()
+    assert "tests" in prompt
+    assert "exit 2" in prompt
+    assert "feat-clean" in prompt

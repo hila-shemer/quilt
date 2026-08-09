@@ -5,10 +5,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import gitio, llm, resolve
+from . import gitio, llm, report, resolve
 
 DIAGNOSE_PROMPT = """\
-A test gate failed for merge point {mp_id} (construction: {construction}).
+Gate {gate} failed (exit {exit_code}) for merge point {mp_id}
+(construction: {construction}).
+Members: {members}
 Member tips: {tips}
 Failure detail:
 {detail}
@@ -110,6 +112,8 @@ def diagnose_failure(repo: Path, db, cfg, item: dict) -> dict | None:
     mp = db.get_merge_point(item["target_id"])
     prompt = DIAGNOSE_PROMPT.format(
         mp_id=mp["id"], construction=mp["construction"],
+        gate=item.get("gate") or "?", exit_code=item.get("exit_code"),
+        members=report.member_label(mp),
         tips=", ".join(mp["member_tips"]), detail=item["detail"] or "")
     try:
         verdict = llm.run_json(cmd, prompt)
