@@ -4,7 +4,8 @@ import sys
 from pathlib import Path
 
 from . import gates as gates_mod
-from . import agent, backprop, candidate, gitio, llm, probe, resolve, scheduler, triage
+from . import (agent, backprop, candidate, gitio, llm, probe, report, resolve,
+               scheduler, triage)
 from .db import DB
 
 
@@ -17,7 +18,21 @@ def main(argv=None):
     sub.add_parser("probe")
     sub.add_parser("tick")
     sub.add_parser("status")
-    sub.add_parser("queue")
+    sub.add_parser("idle")
+    q = sub.add_parser("queue")
+    q.add_argument("--lines", type=int, default=20,
+                   help="detail lines per item (default 20)")
+    q.add_argument("--full", action="store_true",
+                   help="print the complete stored detail")
+    q.add_argument("--state", default="queued",
+                   help="work state to list, or 'all' (default queued)")
+    sh = sub.add_parser("show")
+    sh.add_argument("work_id", type=int)
+    rq = sub.add_parser("requeue")
+    rq.add_argument("work_id", type=int)
+    dm = sub.add_parser("dismiss")
+    dm.add_argument("work_id", type=int)
+    dm.add_argument("--reason", required=True)
     p = sub.add_parser("promote")
     p.add_argument("target")
     pp = sub.add_parser("poison")
@@ -43,12 +58,53 @@ def main(argv=None):
         print(" ".join(f"{k}={v}" for k, v in r.items()))
     elif args.cmd == "status":
         for mp in db.list_merge_points(gitio.tree_of(repo, cfg.base)):
-            highest = db.highest_gate(mp["id"], mp["base_commit_sha"], cfg.ladder)
-            print(f"{mp['id'][:12]} {mp['construction']:9} "
-                  f"{mp['validation_state']:9} gate={highest or '-'}")
+            base = mp["base_commit_sha"]
+            failed = db.failed_gate(mp["id"], base, cfg.ladder)
+            print(report.status_row(
+                mp, state=report.display_state(mp, failed),
+                highest=db.highest_gate(mp["id"], base, cfg.ladder),
+                failed=failed))
+        pending = scheduler.schedulable(repo, db, cfg)
+        print(f"idle={'no' if pending else 'yes'}"
+              + (f" ({len(pending)} merge-points still schedulable)"
+                 if pending else ""))
+    elif args.cmd == "idle":
+        pending = scheduler.schedulable(repo, db, cfg)
+        if pending:
+            print(f"not idle: {len(pending)} merge-points still schedulable")
+            sys.exit(1)
+        print("idle: nothing will change without new tips or drained items")
     elif args.cmd == "queue":
-        for w in db.pending_work():
-            print(f"{w['id']:4} {w['kind']:10} {w['target_id'][:12]} {w['detail'][:60]}")
+        items = (db.all_work() if args.state == "all"
+                 else db.work_by_state(args.state))
+        if not items:
+            print(f"no {args.state} work items")
+        for w in items:
+            for line in report.work_block(w, db.get_merge_point(w["target_id"]),
+                                          limit=args.lines, full=args.full):
+                print(line)
+    elif args.cmd == "show":
+        w = db.get_work(args.work_id)
+        if not w:
+            print(f"no work item {args.work_id}")
+            sys.exit(1)
+        for line in report.work_block(w, db.get_merge_point(w["target_id"]),
+                                      full=True):
+            print(line)
+    elif args.cmd == "requeue":
+        w = db.get_work(args.work_id)
+        if not w:
+            print(f"no work item {args.work_id}")
+            sys.exit(1)
+        db.set_work_state(args.work_id, "queued")
+        print(f"requeued #{args.work_id} (was {w['state']})")
+    elif args.cmd == "dismiss":
+        w = db.get_work(args.work_id)
+        if not w:
+            print(f"no work item {args.work_id}")
+            sys.exit(1)
+        db.dismiss_work(args.work_id, args.reason)
+        print(f"dismissed #{args.work_id}: {args.reason}")
     elif args.cmd == "promote":
         if args.target not in cfg.targets:
             print(f"unknown target: {args.target}")

@@ -3,7 +3,8 @@ from itertools import combinations
 from pathlib import Path
 
 from . import gates as gates_mod
-from . import probe, resolve
+from . import gitio, probe, resolve
+from .keys import merge_point_id
 
 
 def _strict_subsets(ids: list[str]) -> list[frozenset[str]]:
@@ -13,6 +14,42 @@ def _strict_subsets(ids: list[str]) -> list[frozenset[str]]:
         for combo in combinations(ids, size):
             result.append(frozenset(combo))
     return result
+
+
+def schedulable(repo: Path, db, cfg) -> list[str]:
+    """Merge-point ids a further tick would act on of its own accord.
+
+    Empty means idle: nothing changes without new tips or drained items. The
+    per-tick counters are not this predicate — `queued=0 deferred=0` is also
+    what a tick prints on the pass *before* it has scheduled the heavy gates,
+    so a script that waits on it stops one round too early. This looks at the
+    combination set instead, which is stable between ticks.
+
+    Read-only: enumerating combinations needs patch-ids and the base tree, and
+    neither writes.
+    """
+    base_tree = gitio.tree_of(repo, cfg.base)
+    pids = {b: gitio.patch_id(repo, cfg.base, b) for b in cfg.branches}
+    last_rung = cfg.ladder[-1] if cfg.ladder else None
+    out = []
+    for combo in probe.enumerate_combos(cfg.branches):
+        mp_id = merge_point_id(base_tree, [pids[b] for b in combo])
+        mp = db.get_merge_point(mp_id)
+        if mp is None:                      # never probed
+            out.append(mp_id)
+            continue
+        if mp["validation_state"] == "poison" or db.open_work(mp_id):
+            continue                        # decided, or waiting on a drain
+        base = mp["base_commit_sha"]
+        if not mp["result_commit"]:         # conflict with no pinned resolution
+            out.append(mp_id)
+            continue
+        if db.failed_gate(mp_id, base, cfg.ladder):
+            continue
+        if db.highest_gate(mp_id, base, cfg.ladder) == last_rung:
+            continue                        # cleared the whole ladder
+        out.append(mp_id)
+    return out
 
 
 def tick(repo: Path, db, cfg, heavy_k: int = 1) -> dict:
