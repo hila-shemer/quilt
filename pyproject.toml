@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Branch-combination integration pipeline"
 requires-python = ">=3.12"
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [project.scripts]
 quilt = "quilt.cli:main"
 loom = "quilt.loom.cli:main"
