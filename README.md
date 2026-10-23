@@ -1,9 +1,11 @@
 # Quilt
 
-Quilt is a standalone integration pipeline that probes all combinations (N ≤ 5)
-of feature branches against a base via `git merge-tree`, runs a monotone gate
+Quilt is a standalone integration pipeline that probes combinations (N ≤ 5) of
+feature branches against a base via `git merge-tree`, runs a monotone gate
 ladder against each clean merge-point, caches results in SQLite, and promotes
-passing candidates to named target refs.
+passing candidates to named target refs.  It probes the whole set of branches
+first and stops there when that set clears the candidate gate — see the
+short-circuit under *How it works* below.
 
 Inspired by the kernel subsystem-tree → linux-next → mainline flow.  LLM agents
 are **off the happy path**: conflicts and test failures land in a work queue, but
@@ -14,6 +16,8 @@ with zero agent calls.
 
 1. **Enumerate combinations.** For up to 5 feature branches Quilt tries every
    subset ({branch}, {A,B}, {A,B,C}, …).  Each combination is a *merge-point*.
+   `quilt probe` enumerates and probes all of them; `quilt tick` probes the
+   whole set on its own first (see 7, *the short-circuit*).
 
 2. **Probe with `merge-tree`.** Sequential pairwise merges without touching the
    working tree.  A single conflict anywhere marks the whole combination
@@ -38,6 +42,21 @@ with zero agent calls.
 
 6. **Promotion.** `quilt promote <target>` fast-forwards `refs/quilt/target/<target>`
    to the best candidate (highest member count) that has passed all required gates.
+
+7. **The short-circuit.** When a `[promotion]` section names a `candidate_gate`,
+   a tick probes the full set of branches first and gates it before any other
+   combination is probed.  Every other combination is a strict subset of the
+   full set, and promotion picks the largest merge-point that cleared the
+   candidate gate — so a full set that cleared it is the unique winner and the
+   other 2^N−2 probes buy nothing.  The tick stops there: on a green run N ≤ 5
+   costs 1 probe and one ladder run instead of 2^N−1 of each.
+
+   The bar is `freeze`'s own bar, never a clean merge: a set that merges clean
+   and fails `tests` has not cleared a candidate gate of `tests`, and the tick
+   falls back to the whole power set exactly as before.  Two things to know on
+   the green path: `tick` prints `probed=1 short_circuit=True`, and `status`
+   and `idle` have one merge-point to show rather than 2^N−1 — a narrower pool,
+   not a lost one.
 
 ## Quickstart
 

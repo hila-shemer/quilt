@@ -12,6 +12,13 @@
 
 Repository: `/home/shemer/quilt` (this repo). Design spec: `mds/quilt-design.md`.
 
+> **Amended 2026-10-23 — the all-pass short-circuit.** `enumerate_combos` is
+> still exhaustive, and `quilt probe` still probes every combination, but
+> `quilt tick` now probes the size-N set alone first and stops there when it has
+> cleared the configured `candidate_gate`. The code samples below are the June
+> form of the files they build and are kept as the record of that build; the
+> current behaviour is `scheduler.tick` and `mds/quilt-design.md` §4.
+
 ---
 
 ### File structure
@@ -24,7 +31,7 @@ quilt/
   src/quilt/gitio.py        # git plumbing wrappers: run(), patch_id, merge_tree, commit_tree, refs
   src/quilt/keys.py         # merge-point identity: hash(base_tree, sorted patch-ids)
   src/quilt/db.py           # SQLite schema + CRUD
-  src/quilt/probe.py        # power-set enumeration + parallel merge-tree probe
+  src/quilt/probe.py        # power-set enumeration + merge-tree probe (a tick may probe fewer)
   src/quilt/resolve.py      # git-mediate resolution + refs/quilt pinning + poison cascade
   src/quilt/gates.py        # gate ladder runners + promotion readiness
   src/quilt/scheduler.py    # happy-path tick + agent work queue
@@ -547,6 +554,10 @@ class DB:
 ---
 
 ### Task 6: probe — power-set enumeration + merge probe
+
+> Amended 2026-10-23: the enumeration below is unchanged, but `probe_all` takes
+> an optional `combos` list and the tick passes the size-N set alone first — see
+> the note at the top of this plan.
 
 **Files:** Create `src/quilt/probe.py`, `tests/test_probe.py`
 
