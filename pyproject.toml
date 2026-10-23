@@ -5,7 +5,7 @@ description = "Branch-combination integration pipeline"
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pytest-xdist"]
 
 [project.scripts]
 quilt = "quilt.cli:main"
@@ -20,3 +20,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Without this the suite imports `quilt` from whatever the editable install
+# points at - today rightwayc's vendored copy - so a green run here proves
+# nothing about this tree. The vendored copies both had it; we did not.
+pythonpath = ["src"]
