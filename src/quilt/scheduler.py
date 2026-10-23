@@ -57,12 +57,15 @@ def tick(repo: Path, db, cfg, heavy_k: int = 1) -> dict:
     results = probe.probe_all(repo, cfg.base, cfg.branches, db)
     report["probed"] = len(results)
 
-    # Collect the set of member_patch_ids for each untested merge point in pool.
-    untested_sets: list[frozenset[str]] = []
+    # Member sets of every untested merge-point in the pool. Heavy slots (below) are
+    # charged to shared untested *subsets*, which approximates design §4's "shared
+    # unvalidated resolution" serialization by member overlap — coarser than tracking
+    # the resolution ref itself, but sufficient for the K-bounded heavy-test cap.
+    untested_sets: set[frozenset[str]] = set()
     for r in results:
         mp = db.get_merge_point(r["id"])
         if mp and mp["validation_state"] == "untested":
-            untested_sets.append(frozenset(mp["member_patch_ids"]))
+            untested_sets.add(frozenset(mp["member_patch_ids"]))
 
     heavy_used: dict[frozenset[str], int] = {}   # untested strict subset -> heavy slots used
 

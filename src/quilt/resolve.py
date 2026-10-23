@@ -7,15 +7,11 @@ from pathlib import Path
 from . import gitio
 
 
-def evict(repo: Path, db, mp_ids: list[str]) -> None:
+def evict(repo: Path, mp_ids: list[str]) -> None:
     """Delete refs/quilt/<id> for each cascade-reset merge-point id.
     Ignores missing refs."""
-    import subprocess
     for mp_id in mp_ids:
-        subprocess.run(
-            ["git", "-C", str(repo), "update-ref", "-d", f"refs/quilt/{mp_id}"],
-            capture_output=True,
-        )
+        gitio.delete_ref(repo, f"refs/quilt/{mp_id}")
 
 
 def reusable_resolution(repo: Path, db, mp_id: str) -> str | None:
@@ -29,7 +25,7 @@ def poison_merge_point(repo: Path, db, mp_id: str) -> list[str]:
     """Poison a merge-point and evict refs of cascade-reset supersets.
     Shared by the poison CLI and test-failure diagnosis."""
     cascade_ids = db.set_validation(mp_id, "poison")
-    evict(repo, db, cascade_ids)
+    evict(repo, cascade_ids)
     return cascade_ids
 
 
@@ -45,17 +41,17 @@ def try_mediate(repo: Path, db, mp_id: str) -> str | None:
             wt_path = Path(wt)
             for tip in tips:
                 p = subprocess.run(["git", "-C", wt, "merge", "--no-ff", tip],
-                                   capture_output=True, text=True)
+                                   capture_output=True, text=True, env=gitio.GIT_ENV)
                 if p.returncode == 0:
                     continue
                 m = subprocess.run(["git-mediate"], cwd=wt,
-                                   capture_output=True, text=True)
+                                   capture_output=True, text=True, env=gitio.GIT_ENV)
                 if m.returncode != 0:
                     db.enqueue_work("conflict", mp_id, (m.stdout + m.stderr)[-2000:])
                     return None
                 subprocess.run(["git", "-C", wt, "commit", "-am",
                                 f"quilt: mediated merge {tip}"],
-                               check=True, capture_output=True)
+                               check=True, capture_output=True, env=gitio.GIT_ENV)
             merged = gitio.rev(wt_path, "HEAD")
             gitio.update_ref(repo, f"refs/quilt/{mp_id}", merged)
             db.upsert_merge_point(

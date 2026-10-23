@@ -1,4 +1,5 @@
 """Thin wrappers over git plumbing. All functions take repo path as first arg."""
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,12 +9,26 @@ class GitError(Exception):
     """Raised when a git command fails fatally or produces unexpected output."""
 
 
+# Every quilt-authored commit uses a fixed synthetic identity. This keeps porcelain
+# (merge, commit, cherry-pick) from failing on a host with no user.name/email set,
+# makes quilt's commits attributable, and overrides any ambient GIT_* identity so the
+# result is deterministic regardless of the invoking environment. Use this env for any
+# git invocation that may create a commit, including the raw subprocess calls in
+# resolve.py / agent.py that don't route through _run.
+GIT_ENV = {
+    **os.environ,
+    "GIT_AUTHOR_NAME": "quilt", "GIT_AUTHOR_EMAIL": "quilt@localhost",
+    "GIT_COMMITTER_NAME": "quilt", "GIT_COMMITTER_EMAIL": "quilt@localhost",
+}
+
+
 def _run(repo: Path, *args: str, input_text: str | None = None,
          check: bool = True) -> subprocess.CompletedProcess:
     """Run a git command inside *repo* and return the CompletedProcess."""
     return subprocess.run(
         ["git", "-C", str(repo), *args],
         input=input_text, check=check, capture_output=True, text=True,
+        env=GIT_ENV,
     )
 
 
@@ -71,6 +86,11 @@ def commit_tree(repo: Path, tree: str, parents: list[str], msg: str) -> str:
 
 def update_ref(repo: Path, ref: str, sha: str) -> None:
     git(repo, "update-ref", ref, sha)
+
+
+def delete_ref(repo: Path, ref: str) -> None:
+    """Delete *ref*; a missing ref is not an error."""
+    _run(repo, "update-ref", "-d", ref, check=False)
 
 
 def read_ref(repo: Path, ref: str) -> str | None:

@@ -66,7 +66,7 @@ def resolve_conflict(repo: Path, db, cfg, item: dict) -> bool:
         try:
             for tip in tips:
                 p = subprocess.run(["git", "-C", wt, "merge", "--no-ff", tip],
-                                   capture_output=True, text=True)
+                                   capture_output=True, text=True, env=gitio.GIT_ENV)
                 if p.returncode == 0:
                     continue
                 files = _conflicted_files(wtp)
@@ -76,10 +76,10 @@ def resolve_conflict(repo: Path, db, cfg, item: dict) -> bool:
                     return False
                 if gitio.read_ref(wtp, "MERGE_HEAD"):   # agent left merge open
                     subprocess.run(["git", "-C", wt, "add", "-A"],
-                                   check=True, capture_output=True)
+                                   check=True, capture_output=True, env=gitio.GIT_ENV)
                     subprocess.run(["git", "-C", wt, "commit", "-m",
                                     f"quilt: agent merge {tip}"],
-                                   check=True, capture_output=True)
+                                   check=True, capture_output=True, env=gitio.GIT_ENV)
             head = gitio.rev(wtp, "HEAD")
             glue = [line for line in gitio.git(
                 wtp, "rev-list", "--no-merges", head, f"^{base_commit}",

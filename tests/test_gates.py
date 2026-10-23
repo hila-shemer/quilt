@@ -270,3 +270,32 @@ def test_short_gate_does_not_validate(repo_with_branches, db, cfg):
     [mp] = probe.probe_all(repo_with_branches.path, "main", ["feat-clean"], db)
     gates.run_ladder(repo_with_branches.path, db, cfg, mp["id"])
     assert db.get_merge_point(mp["id"])["validation_state"] == "untested"
+
+
+def test_poisoned_point_is_not_re_gated(repo_with_branches, db, tmp_path):
+    """scheduler.tick probes every combination every tick, so without a
+    short-circuit a poisoned (known-bad) resolution re-runs its whole ladder
+    on each one. The gate command must not run at all."""
+    sentinel = tmp_path / "gate-ran"
+    cfgfile = tmp_path / "poison.toml"
+    cfgfile.write_text(f"""
+[quilt]
+base = "main"
+branches = ["feat-clean"]
+
+[[gate]]
+name = "compiles"
+cmd = "touch {sentinel}"
+
+[targets]
+next = "compiles"
+""")
+    poison_cfg = gates.load_config(cfgfile)
+    [mp] = probe.probe_all(repo_with_branches.path, "main", ["feat-clean"], db)
+    db.set_validation(mp["id"], "poison")
+
+    assert gates.run_ladder(repo_with_branches.path, db, poison_cfg,
+                            mp["id"]) is None
+    assert not sentinel.exists(), "gate command ran for a poisoned merge-point"
+    base = db.get_merge_point(mp["id"])["base_commit_sha"]
+    assert db.gate_result(mp["id"], "compiles", base) is None
