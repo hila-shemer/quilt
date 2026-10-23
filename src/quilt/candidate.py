@@ -8,6 +8,23 @@ from pathlib import Path
 from . import gitio
 
 
+def clears_candidate_gate(db, ladder: list[str], mp: dict | None,
+                          cand_gate: str) -> bool:
+    """Has *mp* cleared *cand_gate* on *ladder*?
+
+    The bar is the ladder's, not the merge's: a set that merges clean and fails
+    `tests` has not cleared a candidate gate of `tests`. `freeze` promotes
+    against this and the scheduler's short-circuit stops on it, written once so
+    the two cannot drift apart — a short-circuit on merge-clean alone would stop
+    the search with nothing promoted, where a subset would have passed.
+    """
+    if not mp or not mp["result_commit"] or mp["validation_state"] == "poison":
+        return False
+    highest = db.highest_gate(mp["id"], mp["base_commit_sha"], ladder)
+    return (highest is not None
+            and ladder.index(highest) >= ladder.index(cand_gate))
+
+
 def freeze(repo: Path, db, cfg) -> dict | None:
     """Freeze the largest non-poison merge-point that cleared the candidate
     gate. Returns {candidate, merge_point, commit} or None (nothing ready, or
@@ -19,10 +36,7 @@ def freeze(repo: Path, db, cfg) -> dict | None:
     ladder = cfg.ladder
     best = None
     for mp in db.list_merge_points(gitio.tree_of(repo, cfg.base)):
-        if not mp["result_commit"] or mp["validation_state"] == "poison":
-            continue
-        highest = db.highest_gate(mp["id"], mp["base_commit_sha"], ladder)
-        if highest is None or ladder.index(highest) < ladder.index(cand_gate):
+        if not clears_candidate_gate(db, ladder, mp, cand_gate):
             continue
         if best is None or len(mp["member_patch_ids"]) > len(best["member_patch_ids"]):
             best = mp

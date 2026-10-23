@@ -18,6 +18,17 @@ def test_enumerates_power_set():
     assert len(combos) == 7  # 2^3 - 1
 
 
+def test_probe_all_probes_only_the_combos_it_is_given(repo_with_branches, db):
+    """Narrowing what is *probed* leaves what is *enumerated* exhaustive: the
+    tick probes the size-N set alone first, and this is that one call."""
+    results = probe.probe_all(repo_with_branches.path, "main",
+                              ["feat-clean", "feat-conflict"], db,
+                              combos=[("feat-clean", "feat-conflict")])
+    assert [tuple(r["branches"]) for r in results] == \
+        [("feat-clean", "feat-conflict")]
+    assert len(db.list_merge_points()) == 1
+
+
 def test_probe_records_clean_and_conflict(repo_with_branches, db):
     results = probe.probe_all(repo_with_branches.path, "main",
                               ["feat-clean", "feat-conflict"], db)

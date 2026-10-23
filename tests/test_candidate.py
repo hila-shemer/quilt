@@ -27,8 +27,8 @@ def db(tmp_path):
     return DB(tmp_path / "q.sqlite3")
 
 
-def _cfg(tmp_path, text=CFG_PROMO):
-    p = tmp_path / "promo.toml"
+def _cfg(tmp_path, text=CFG_PROMO, name="promo.toml"):
+    p = tmp_path / name
     p.write_text(text)
     return gates.load_config(p)
 
@@ -38,6 +38,44 @@ def gated(repo_with_branches, db, tmp_path):
     cfg = _cfg(tmp_path)
     scheduler.tick(repo_with_branches.path, db, cfg)
     return repo_with_branches, db, cfg
+
+
+CFG_TWO_GATE = """
+[quilt]
+base = "main"
+branches = ["feat-clean"]
+
+[[gate]]
+name = "compiles"
+cmd = "test -f base.txt"
+
+[[gate]]
+name = "tests"
+cmd = "false"
+
+[targets]
+main = "tests"
+
+[promotion]
+target = "main"
+candidate_gate = "tests"
+final_gate = "promote"
+final_cmd = "test -f base.txt"
+"""
+
+
+def test_the_candidate_gate_bar_is_the_ladder_not_the_merge(
+        repo_with_branches, db, tmp_path):
+    """`clears_candidate_gate` is `freeze`'s own bar, and it is the only thing
+    the short-circuit may test. Here the merge is clean and the candidate gate
+    is `tests`, which failed: merge-clean is not passing, and a search that
+    stopped on it would promote nothing where a subset would have passed."""
+    cfg = _cfg(tmp_path, CFG_TWO_GATE, "two-gate.toml")
+    scheduler.tick(repo_with_branches.path, db, cfg)
+    [mp] = db.list_merge_points()
+    assert mp["result_commit"]                      # the merge was clean
+    assert candidate.clears_candidate_gate(db, cfg.ladder, mp, "compiles") is True
+    assert candidate.clears_candidate_gate(db, cfg.ladder, mp, "tests") is False
 
 
 def test_freeze_picks_largest_ready(gated):
