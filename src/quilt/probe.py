@@ -1,5 +1,12 @@
 """Enumerate branch combinations (N<=5) and probe each with merge-tree.
-Sequential pairwise merges; conflict at any step marks the combo 'conflict'."""
+Sequential pairwise merges; conflict at any step marks the combo 'conflict'.
+
+Enumeration is exhaustive by contract: the whole power set is what the failure
+path walks, so it is what `enumerate_combos` returns and what `probe_all` probes
+when it is not told otherwise. What a caller may narrow is which combinations
+are *probed* — a tick probes the size-N set on its own first, so that a set
+which has cleared the candidate gate can stop the search before the other
+2^N-2 are probed at all (see `scheduler.tick`)."""
 from itertools import combinations
 from pathlib import Path
 
@@ -36,7 +43,15 @@ def probe_combo(repo: Path, base: str, branches: tuple[str, ...],
     return "clean", current, gitio.tree_of(repo, current)
 
 
-def probe_all(repo: Path, base: str, branches: list[str], db) -> list[dict]:
+def probe_all(repo: Path, base: str, branches: list[str], db,
+              combos: list[tuple[str, ...]] | None = None) -> list[dict]:
+    """Probe *combos* of *branches* with merge-tree and record each merge-point.
+
+    *combos* defaults to the whole power set (`enumerate_combos`). A caller may
+    pass a narrower list — the tick passes the size-N set alone first, and the
+    rest only if that set did not clear the candidate gate. Results come back in
+    the order they were given.
+    """
     base_tree = gitio.tree_of(repo, base)
     base_commit = gitio.rev(repo, base)
     pids = {}
@@ -48,7 +63,7 @@ def probe_all(repo: Path, base: str, branches: list[str], db) -> list[dict]:
             # carry the underlying cause rather than asserting "empty diff".
             raise ValueError(f"branch {b}: {e}") from e
     results = []
-    for combo in enumerate_combos(branches):
+    for combo in (enumerate_combos(branches) if combos is None else combos):
         member_pids = [pids[b] for b in combo]
         mp_id = merge_point_id(base_tree, member_pids)
         # Skip upsert+merge if a pinned, non-poison resolution already exists.
