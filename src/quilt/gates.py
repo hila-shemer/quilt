@@ -66,6 +66,10 @@ def run_ladder(repo: Path, db, cfg: Config, mp_id: str) -> str | None:
     mp = db.get_merge_point(mp_id)
     if not mp or not mp["result_commit"]:
         return None
+    # A poisoned resolution is known-bad; scheduler.tick probes every point each tick,
+    # so skip re-gating it (ready_targets/freeze already exclude poison from promotion).
+    if mp["validation_state"] == "poison":
+        return None
     base = mp["base_commit_sha"]
     highest = None
 
@@ -99,6 +103,10 @@ def run_ladder(repo: Path, db, cfg: Config, mp_id: str) -> str | None:
                                     gate=gate["name"],
                                     exit_code=proc.returncode)
                     break
+                # validation_state tracks the long-test verdict specifically, not the whole
+                # ladder. If a later non-long gate fails it's surfaced via the queued test_fail
+                # and via highest_gate (which stops at the failing rung), so promotion is gated
+                # correctly without un-validating the long-test result.
                 if long_gate:
                     db.set_validation(mp_id, "validated")
                 highest = gate["name"]

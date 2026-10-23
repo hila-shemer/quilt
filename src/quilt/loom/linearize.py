@@ -40,10 +40,10 @@ def _cherry_pick(wt: Path, commit: str) -> bool:
     """Apply *commit*'s diff onto the worktree's HEAD. Returns False (and aborts)
     on conflict."""
     p = subprocess.run(["git", "-C", str(wt), "cherry-pick", "--allow-empty", commit],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=gitio.GIT_ENV)
     if p.returncode != 0:
         subprocess.run(["git", "-C", str(wt), "cherry-pick", "--abort"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=gitio.GIT_ENV)
         return False
     return True
 

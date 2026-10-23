@@ -43,8 +43,10 @@ def probe_all(repo: Path, base: str, branches: list[str], db) -> list[dict]:
     for b in branches:
         try:
             pids[b] = gitio.patch_id(repo, base, b)
-        except gitio.GitError:
-            raise ValueError(f"branch {b} has empty diff vs base")
+        except gitio.GitError as e:
+            # patch_id raises for an empty diff *and* for a bad ref / missing object;
+            # carry the underlying cause rather than asserting "empty diff".
+            raise ValueError(f"branch {b}: {e}") from e
     results = []
     for combo in enumerate_combos(branches):
         member_pids = [pids[b] for b in combo]

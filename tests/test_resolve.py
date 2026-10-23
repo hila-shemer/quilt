@@ -57,7 +57,7 @@ def test_evict_removes_superset_ref_and_leaves_poisoned_ref_intact(repo_with_bra
     # poison the 1-member point: DB returns cascade ids
     cascade_ids = db.set_validation(solo_id, "poison")
     # evict git refs for all cascade-reset merge-points
-    resolve.evict(repo_with_branches.path, db, cascade_ids)
+    resolve.evict(repo_with_branches.path, cascade_ids)
 
     # superset ref deleted → reusable_resolution is None
     assert gitio.read_ref(repo_with_branches.path, f"refs/quilt/{pair_id}") is None
