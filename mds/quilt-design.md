@@ -153,6 +153,21 @@ resolution. Poison cascades to every merge-point whose member set is a superset
 **Happy path (no LLM):** enumerate candidates → `merge-tree` clean → fast gates
 pass → launch long tests immediately. No agent woken.
 
+**The all-pass short-circuit.** The happy path enumerates the full set first,
+gated before any other candidate is probed. Every other combination is a strict
+subset of it, and promotion picks the largest merge-point that cleared the
+candidate gate, so a full set that cleared that gate is the unique winner and
+enumerating the rest buys nothing. On a green run the pool is 1 merge-point, not
+2^N−1.
+
+The bar is `freeze`'s — the candidate gate on the full ladder — and never a
+clean merge: a set that merges clean and fails `tests` has not cleared a
+candidate gate of `tests`. When the full set does not clear it, the tick walks
+the whole power set exactly as before, so the subset rows the poison cascade
+resets supersets over and the failure bisect compares are all still there. The
+`schedulable` predicate carries the same rule, or `idle` would count the
+un-probed subsets as pending forever.
+
 **Routing on break:** any conflict (after mediate) or gate failure triggers the
 cheap triage model first. `trivial`/`moderate` → wake the capable agent.
 `complex` → queue, deprioritize, or drop.
@@ -162,7 +177,9 @@ share a member subset whose resolution is `untested`/`inflight`, allow at most
 *K* concurrent heavy slots over that resolution; spend one slot, learn the
 verdict, then release or drop the dependents.
 
-**Materialization policy.** Power set of N ≤ 5 branches (≤ 31 combinations).
+**Materialization policy.** Power set of N ≤ 5 branches (≤ 31 combinations),
+of which the size-N set is probed first and the rest only when it has not
+cleared the candidate gate (see *the all-pass short-circuit* above).
 N shrinks by promoting "proven" branches — branch surviving merge with all
 others promotes alone to base/next, reducing N. At N = 5 new branches are
 rejected. An optional `staging` line before `next` adds budget headroom.
@@ -201,7 +218,8 @@ can be auto-applied by a deterministic fixer without the capable agent.
 ## 7. Phased build
 
 - **Phase 0 — Schema + merge-probe core.** Content-keyed DB, patch-id keying,
-  power-set enumeration, parallel `merge-tree` probe. Deliverable: map of which
+  power-set enumeration (exhaustive — the tick narrows what it *probes*, not
+  what is enumerated), parallel `merge-tree` probe. Deliverable: map of which
   tips merge cleanly. No tests, no LLM.
 - **Phase 1 — Gate ladder + lazy invalidation.** Configurable gate runners →
   `gate_status` keyed by base; staleness-by-absence; promotion readiness.

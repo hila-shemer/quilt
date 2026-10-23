@@ -33,10 +33,11 @@ sec() { printf '\n'; }                                                # one blan
 
 # --- overview: assume the viewer last saw this months ago, name alone won't do
 say "quilt -- a branch-combination integration pipeline (a tiny linux-next)."
-say "It probes EVERY subset of up to 5 feature branches against a base, merges each"
+say "It probes combinations of up to 5 feature branches against a base, merges each"
 say "with git merge-tree (no working-tree churn), runs a gate ladder, and promotes the"
-say "LARGEST combo that passes -- zero LLM calls on the happy path. Conflicts/test-fails"
-say "fall off into a work queue you drain. Demoing: $TOOL"
+say "LARGEST combo that passes -- zero LLM calls on the happy path. When the WHOLE set"
+say "passes first it stops there (the all-pass short-circuit, last section). Conflicts/"
+say "test-fails fall off into a work queue you drain. Demoing: $TOOL"
 
 # --- proof of life: cheap facts that work even if nothing is set up
 sec
@@ -79,7 +80,8 @@ say "probe enumerates every subset and merge-trees it; clean ones become merge-p
 run "QUILT --repo $tmp --config $tmp/quilt.toml probe"
 
 sec
-say "tick re-probes + runs the gate ladder on each clean merge-point in one pass:"
+say "tick re-probes + runs the gate ladder on each clean merge-point in one pass (this"
+say "config has no [promotion] section, so there is no candidate gate to stop on):"
 run "QUILT --repo $tmp --config $tmp/quilt.toml tick"
 
 sec
@@ -89,6 +91,44 @@ run "QUILT --repo $tmp --config $tmp/quilt.toml status"
 sec
 say "promote fast-forwards refs/quilt/target/main to the LARGEST passing combo (the pair):"
 run "QUILT --repo $tmp --config $tmp/quilt.toml promote main && git -C $tmp log --oneline -1 refs/quilt/target/main"
+
+sec
+say "Now the short-circuit. Same two branches, plus a [promotion] candidate_gate: the"
+say "whole set clears it, so the tick probes ONE merge-point (the pair) and stops --"
+say "every other combination is a strict subset of it and cannot win promotion:"
+tmp2=$(mktemp -d)
+( cd "$tmp2" && git init -q -b main \
+  && printf 'line1\nline2\nline3\n' > app.txt && git add app.txt && git commit -qm base \
+  && git checkout -q -b feat-a && printf 'line1-A\nline2\nline3\n'  > app.txt && git commit -qam 'feat A: edit line1' \
+  && git checkout -q main && git checkout -q -b feat-b && printf 'line1\nline2\nline3-B\n' > app.txt && git commit -qam 'feat B: edit line3' \
+  && git checkout -q main )
+cat > "$tmp2/quilt.toml" <<'TOML'
+[quilt]
+base     = "main"
+branches = ["feat-a", "feat-b"]
+
+[[gate]]
+name = "smoke"
+cmd  = "grep -q line2 {workdir}/app.txt"
+
+[targets]
+main = "smoke"
+
+[promotion]
+target         = "main"
+candidate_gate = "smoke"
+final_gate     = "promote"
+final_cmd      = "grep -q line2 {workdir}/app.txt"
+TOML
+run "QUILT --repo $tmp2 --config $tmp2/quilt.toml tick"
+sec
+say "probed=1 short_circuit=True. status shows the ONE merge-point it kept, and idle=yes:"
+say "the 2 singles were never probed, so they are not pending work -- a narrower pool,"
+say "not a lost one. (A set that merges clean but FAILS the candidate gate gets no"
+say "short-circuit: then the whole power set is walked, subsets and all.)"
+run "QUILT --repo $tmp2 --config $tmp2/quilt.toml status"
+run "QUILT --repo $tmp2 --config $tmp2/quilt.toml idle"
+rm -rf "$tmp2"
 
 sec
 say "That's quilt: clean merges + a passing gate ladder => an integrated ref, no agent. Source: $SRC"
