@@ -10,10 +10,18 @@ Ordering policy (ascending sort key, every component ascending):
   2. stability:       higher score first  (more stable / less churn lands earlier)
   3. size:            smaller first       (larger increments land last)
   4. age:             older first         (lower insertion order earlier)
+  5. id:              ascending           (last tiebreak; ids are unique)
 
 This pins the spec's `(priority_class, stability, -size, age)` shorthand:
 "-stability" (higher first) and "+size" (smaller first), i.e. tests-first,
 stable-first, small-first, old-first.
+
+Component 5 makes the key a *total* order. The first four are frequently tied —
+`pipeline.py` seeds `age=i` from 0 within each branch's rev-list, so two branches
+each contributing an increment at index 0 tie on all four — and without a
+tiebreak `order()` would answer from set-iteration order, which is
+`PYTHONHASHSEED`-dependent. `id` cannot itself tie: ids are the keys of `by_id`
+and the PRIMARY KEY of the `increment` table, so no two increments share one.
 """
 import json
 import time
@@ -48,7 +56,8 @@ class Increment:
 
 
 def _key(inc: Increment):
-    return (PRIORITY_RANK.get(inc.priority_class, 99), -inc.stability, inc.size, inc.age)
+    return (PRIORITY_RANK.get(inc.priority_class, 99), -inc.stability, inc.size,
+            inc.age, inc.id)
 
 
 # --- CRUD -------------------------------------------------------------------
@@ -118,7 +127,8 @@ def list_dep_edges(db) -> list[dict]:
 
 def order(incs: list[Increment], dep_edges: list | None = None) -> list[Increment]:
     """Topological sort honoring dep_edge (ground truth), tie-broken by the
-    policy key. Raises CycleError if the constraints are cyclic.
+    policy key and finally by id, so the result is one answer every time.
+    Raises CycleError if the constraints are cyclic.
 
     dep_edges may be a list of (x, y) tuples or of dict rows with 'x'/'y' keys.
     Edge (x, y) means y must precede x."""
