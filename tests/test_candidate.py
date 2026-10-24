@@ -124,6 +124,33 @@ def test_advance_without_freeze(gated):
     assert candidate.advance(r.path, db, cfg) is None
 
 
+@pytest.mark.parametrize("promo", [
+    CFG_PROMO.replace('final_cmd = "test -f base.txt"\n', ""),   # absent
+    CFG_PROMO.replace('final_cmd = "test -f base.txt"', 'final_cmd = ""'),
+], ids=["absent", "empty"])
+def test_advance_refuses_a_final_cmd_that_cannot_run(
+        repo_with_branches, db, tmp_path, promo):
+    """An empty final_cmd is a check that cannot fail: `subprocess.run("",
+    shell=True)` exits 0, so a `final_cmd` present but empty used to record the
+    final gate as *passing* — and promote on it — without running anything. The
+    absent key is the same refusal by the same read.
+
+    Both leave the merge point retryable: the refusal is inside the try, so the
+    reset runs, exactly as it does for a worktree that will not come up."""
+    cfg = _cfg(tmp_path, promo)
+    scheduler.tick(repo_with_branches.path, db, cfg)
+    out = candidate.freeze(repo_with_branches.path, db, cfg)
+    with pytest.raises(gates.ConfigError) as ei:
+        candidate.advance(repo_with_branches.path, db, cfg)
+    assert str(ei.value) == "quilt.toml: [promotion] has no final_cmd to run"
+    assert gitio.read_ref(repo_with_branches.path,
+                          "refs/quilt/target/main") is None
+    mp = db.get_merge_point(out["merge_point"])
+    assert db.gate_result(mp["id"], "t4day", mp["base_commit_sha"]) is None
+    assert mp["validation_state"] == "untested"
+    assert db.active_candidate("main")["mp_id"] == out["merge_point"]
+
+
 def test_advance_exception_resets_inflight(gated, monkeypatch):
     """A crash mid-advance must not leave the merge point stuck inflight."""
     r, db, cfg = gated
