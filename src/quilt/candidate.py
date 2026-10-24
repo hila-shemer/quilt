@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from . import gitio
+from .gates import ConfigError
 
 
 def clears_candidate_gate(db, ladder: list[str], mp: dict | None,
@@ -52,7 +53,10 @@ def freeze(repo: Path, db, cfg) -> dict | None:
 def advance(repo: Path, db, cfg) -> bool | None:
     """Run the final gate on the frozen candidate. True = promoted (target ref
     advanced), False = failed (candidate marked failed, test_fail queued),
-    None = nothing frozen."""
+    None = nothing frozen.
+
+    An absent or empty `final_cmd` is refused by name before that: it used to run
+    an empty shell that exits 0 and recorded the final gate as *passing*."""
     target = cfg.promotion["target"]
     cand = db.active_candidate(target)
     if not cand:
@@ -63,10 +67,18 @@ def advance(repo: Path, db, cfg) -> bool | None:
         return False
     db.set_validation(mp["id"], "inflight")
     try:
+        # Read the command here rather than before the try for the reset's sake:
+        # a missing final_cmd has to leave the merge point retryable exactly as a
+        # worktree that will not come up does. Empty is refused with absent —
+        # subprocess.run("", shell=True) exits 0, so an empty final_cmd would
+        # record the final gate as passing, a check that cannot fail.
+        cmd = cfg.promotion.get("final_cmd", "")
+        if not cmd:
+            raise ConfigError("quilt.toml: [promotion] has no final_cmd to run")
         with tempfile.TemporaryDirectory() as wt:
             gitio.git(repo, "worktree", "add", "--detach", wt, cand["commit_sha"])
             try:
-                cmd = cfg.promotion["final_cmd"].replace("{workdir}", wt)
+                cmd = cmd.replace("{workdir}", wt)
                 proc = subprocess.run(cmd, shell=True, cwd=wt,
                                       capture_output=True, text=True)
             finally:

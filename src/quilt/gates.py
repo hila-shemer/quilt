@@ -14,6 +14,18 @@ from . import gitio
 MAX_DETAIL_BYTES = 512 * 1024
 
 
+class ConfigError(Exception):
+    """quilt.toml cannot be read as the run needs it: a key is absent, or it is
+    present and empty where a value has to mean something.
+
+    The empty case is the reason this is a type of its own rather than a
+    KeyError. `subprocess.run("", shell=True)` exits 0, so a `final_cmd` that is
+    present but empty is a command that "passes" without running — a check that
+    cannot fail — and a `final_gate` with no name writes a gate_status row under
+    the empty string. Reading those as legitimate values is what
+    `candidate.advance` refuses by name."""
+
+
 @dataclass
 class Config:
     base: str
