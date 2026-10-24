@@ -151,6 +151,31 @@ def test_advance_refuses_a_final_cmd_that_cannot_run(
     assert db.active_candidate("main")["mp_id"] == out["merge_point"]
 
 
+@pytest.mark.parametrize("promo", [
+    CFG_PROMO.replace('final_gate = "t4day"\n', ""),             # absent
+    CFG_PROMO.replace('final_gate = "t4day"', 'final_gate = ""'),
+], ids=["absent", "empty"])
+def test_advance_refuses_a_final_gate_it_cannot_name(
+        repo_with_branches, db, tmp_path, promo):
+    """The gate's name was the one [promotion] key advance subscripted, and it
+    subscripted it at db.record_gate — the end — so an absent one raised KeyError
+    there, out of the middle of the advance, after the final command had run and
+    after the merge point was marked inflight. Refused by name now, before
+    anything is written; an empty name is refused with the absent one, because
+    the row it would write records a verdict under no gate at all."""
+    cfg = _cfg(tmp_path, promo)
+    scheduler.tick(repo_with_branches.path, db, cfg)
+    out = candidate.freeze(repo_with_branches.path, db, cfg)
+    with pytest.raises(gates.ConfigError) as ei:
+        candidate.advance(repo_with_branches.path, db, cfg)
+    assert str(ei.value) == "quilt.toml: [promotion] has no final_gate"
+    assert gitio.read_ref(repo_with_branches.path,
+                          "refs/quilt/target/main") is None
+    mp = db.get_merge_point(out["merge_point"])
+    assert mp["validation_state"] == "untested"      # never marked inflight
+    assert db.active_candidate("main")["mp_id"] == out["merge_point"]
+
+
 def test_advance_exception_resets_inflight(gated, monkeypatch):
     """A crash mid-advance must not leave the merge point stuck inflight."""
     r, db, cfg = gated

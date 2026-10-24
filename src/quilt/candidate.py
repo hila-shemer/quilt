@@ -55,8 +55,11 @@ def advance(repo: Path, db, cfg) -> bool | None:
     advanced), False = failed (candidate marked failed, test_fail queued),
     None = nothing frozen.
 
-    An absent or empty `final_cmd` is refused by name before that: it used to run
-    an empty shell that exits 0 and recorded the final gate as *passing*."""
+    Two [promotion] keys are refused by name before that: an absent or empty
+    `final_gate`, and an absent or empty `final_cmd`. Both used to be read as
+    something they are not — the first raised a KeyError out of the middle of the
+    advance, the second ran an empty shell that exits 0 and recorded the gate as
+    *passing*."""
     target = cfg.promotion["target"]
     cand = db.active_candidate(target)
     if not cand:
@@ -65,6 +68,17 @@ def advance(repo: Path, db, cfg) -> bool | None:
     if mp["validation_state"] == "poison":
         db.set_candidate_state(cand["id"], "failed")
         return False
+    # The gate's name is read here — after the poison check, before anything is
+    # written — because that is the last point at which refusing costs nothing.
+    # It used to be subscripted at db.record_gate, at the *end* of the advance:
+    # an absent key raised KeyError there, after the final command had run and
+    # after the merge point was marked inflight, which is where it stayed — the
+    # reset below covers the `with` block, not a failure after it. An empty name
+    # is refused with the absent one; db.record_gate checks the status, not the
+    # name, so it would write a gate_status row under the empty string.
+    final_gate = cfg.promotion.get("final_gate", "")
+    if not final_gate:
+        raise ConfigError("quilt.toml: [promotion] has no final_gate")
     db.set_validation(mp["id"], "inflight")
     try:
         # Read the command here rather than before the try for the reset's sake:
@@ -87,8 +101,7 @@ def advance(repo: Path, db, cfg) -> bool | None:
         db.set_validation(mp["id"], "untested")
         raise
     status = "pass" if proc.returncode == 0 else "fail"
-    db.record_gate(mp["id"], cfg.promotion["final_gate"],
-                   mp["base_commit_sha"], status)
+    db.record_gate(mp["id"], final_gate, mp["base_commit_sha"], status)
     if status == "pass":
         db.set_validation(mp["id"], "validated")
         gitio.update_ref(repo, f"refs/quilt/target/{target}",
@@ -98,6 +111,6 @@ def advance(repo: Path, db, cfg) -> bool | None:
     db.set_validation(mp["id"], "untested")
     db.set_candidate_state(cand["id"], "failed")
     db.enqueue_work("test_fail", mp["id"],
-                    f"{cfg.promotion['final_gate']}: "
+                    f"{final_gate}: "
                     f"{proc.stdout[-1000:]}{proc.stderr[-1000:]}")
     return False
