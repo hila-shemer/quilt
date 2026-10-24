@@ -49,6 +49,15 @@ def test_probe_all_raises_on_empty_diff(repo, db):
         probe.probe_all(repo.path, "main", ["empty-branch"], db)
 
 
+def test_probe_all_raises_on_unresolvable_branch(repo_with_branches, db):
+    """The other way a branch yields no patch-id: git cannot resolve it at all
+    (a name typo'd or deleted from quilt.toml). Same class of caller error, so
+    probe_all names the branch the same way - the ValueError contract does not
+    depend on the diff being empty."""
+    with pytest.raises(ValueError, match="branch no-such-branch"):
+        probe.probe_all(repo_with_branches.path, "main", ["no-such-branch"], db)
+
+
 def test_probe_marks_conflicts(repo_with_branches, db):
     r = repo_with_branches
     r.git("checkout", "-q", "main")

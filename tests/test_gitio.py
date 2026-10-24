@@ -22,6 +22,14 @@ def test_patch_id_empty_diff_raises_git_error(repo):
         gitio.patch_id(repo.path, "main", "empty-branch")
 
 
+def test_patch_id_bad_ref_raises_git_error(repo):
+    """The other half of that contract: a ref git cannot resolve is a GitError
+    too, not a subprocess.CalledProcessError escaping the plumbing layer. The
+    message names the ref, so a caller wrapping it can name the branch."""
+    with pytest.raises(gitio.GitError, match="main...no-such-branch"):
+        gitio.patch_id(repo.path, "main", "no-such-branch")
+
+
 # ---------------------------------------------------------------------------
 # Existing tests (must keep passing)
 # ---------------------------------------------------------------------------

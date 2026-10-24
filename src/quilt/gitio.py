@@ -45,11 +45,21 @@ def tree_of(repo: Path, committish: str) -> str:
 
 
 def patch_id(repo: Path, base: str, tip: str) -> str:
-    """Stable patch-id of the combined diff base...tip (metadata-insensitive)."""
-    diff = _run(repo, "diff", f"{base}...{tip}").stdout
-    if not diff:
+    """Stable patch-id of the combined diff base...tip (metadata-insensitive).
+
+    Raises GitError for both ways this patch-id cannot be had: an empty diff,
+    and a diff git refuses to compute at all - an unresolvable ref, a missing
+    object. One exception type for the whole class, the treatment merge_tree
+    gives the same failures at the bottom of this file, so that a caller
+    wrapping patch_id names the offending branch instead of leaking a
+    subprocess error."""
+    p = _run(repo, "diff", f"{base}...{tip}", check=False)
+    if p.returncode != 0:
+        raise GitError(f"git diff failed for {base}...{tip}: "
+                       + p.stderr.strip())
+    if not p.stdout:
         raise GitError(f"empty diff: {base}...{tip}")
-    out = _run(repo, "patch-id", "--stable", input_text=diff).stdout
+    out = _run(repo, "patch-id", "--stable", input_text=p.stdout).stdout
     return out.split()[0] if out else ""
 
 
