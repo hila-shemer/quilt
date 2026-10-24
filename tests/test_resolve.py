@@ -29,10 +29,19 @@ def test_reusable_resolution_unknown_mp(db, tmp_path):
     assert resolve.reusable_resolution(tmp_path, db, "nonexistent-mp-id") is None
 
 
-def test_reuse_blocked_when_poison(conflicted):
-    repo, db, mp_id = conflicted
+def test_reuse_blocked_when_poison(repo_with_branches, db):
+    """A pinned resolution is reusable, and poisoning the merge-point takes that
+    away.
+
+    The ref must exist before the poison, or the assertion holds for the wrong
+    reason. A *conflicted* merge-point writes no ref at all (probe_combo returns
+    no commit), so `reusable_resolution` is None there whether or not the poison
+    gate exists - which is what this test used to assert against."""
+    res = probe.probe_all(repo_with_branches.path, "main", ["feat-clean"], db)
+    mp_id = res[0]["id"]
+    assert resolve.reusable_resolution(repo_with_branches.path, db, mp_id) is not None
     db.set_validation(mp_id, "poison")
-    assert resolve.reusable_resolution(repo.path, db, mp_id) is None
+    assert resolve.reusable_resolution(repo_with_branches.path, db, mp_id) is None
 
 
 def test_reuse_returns_pinned_ref(repo_with_branches, db):
