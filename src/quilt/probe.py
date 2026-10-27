@@ -1,12 +1,18 @@
 """Enumerate branch combinations (N<=5) and probe each with merge-tree.
 Sequential pairwise merges; conflict at any step marks the combo 'conflict'.
 
-Enumeration is exhaustive by contract: the whole power set is what the failure
-path walks, so it is what `enumerate_combos` returns and what `probe_all` probes
-when it is not told otherwise. What a caller may narrow is which combinations
-are *probed* — a tick probes the size-N set on its own first, so that a set
-which has cleared the candidate gate can stop the search before the other
-2^N-2 are probed at all (see `scheduler.tick`)."""
+Enumeration is exhaustive by contract: the whole power set is what
+`enumerate_combos` returns and what `probe_all` probes when it is not told
+otherwise, so that every combination has a row for the poison cascade, the
+failure bisect and `freeze` to read.
+
+What a caller decides is which combinations are *probed* and which the ladder is
+*spent* on, and those are not the same question. A tick probes the size-N set on
+its own first and stops there when it has cleared the candidate gate, before the
+other 2^N-2 are probed at all; when it has not, it probes the rest and walks them
+largest-first, stopping at the first set that clears the gate (see
+`scheduler.tick`). Probing a combination is a merge; running the ladder over one
+is a suite, and the walk order is what decides how many sets pay that."""
 from itertools import combinations
 from pathlib import Path
 
