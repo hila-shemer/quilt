@@ -162,11 +162,31 @@ enumerating the rest buys nothing. On a green run the pool is 1 merge-point, not
 
 The bar is `freeze`'s — the candidate gate on the full ladder — and never a
 clean merge: a set that merges clean and fails `tests` has not cleared a
-candidate gate of `tests`. When the full set does not clear it, the tick walks
-the whole power set exactly as before, so the subset rows the poison cascade
-resets supersets over and the failure bisect compares are all still there. The
-`schedulable` predicate carries the same rule, or `idle` would count the
-un-probed subsets as pending forever.
+candidate gate of `tests`. When the full set does not clear it, the tick probes
+the rest of the power set exactly as before, so the subset rows the poison
+cascade resets supersets over and the failure bisect compares are all still
+there, and then walks them by *descending* size, stopping at the first set that
+clears the candidate gate. The `schedulable` predicate carries the same rule, or
+`idle` would count the un-probed subsets as pending forever.
+
+**Amended 2026-10-27 — the fallback descends by size.** Enumeration stays
+exhaustive and every combination is still probed; what the amendment changes is
+the order the *ladder* is spent in, and where the walk stops. The answer is the
+largest set that clears the candidate gate, so a set of size *k* that clears it
+beats every smaller one and none of them has to run: the fallback walks
+largest-first and stops at the first set that clears the gate, maximal because
+everything above it was tried and did not. A suite is the unit of cost, so this
+is the difference between one suite per conflict-free subset of the offer —
+`2^N−1`, less `2^(N−2)` when one pair of series is mutually exclusive — and one
+per set at the size that answers. Measured on a four-series stack with one
+incompatible pair, 2026-10-27: **11 suites (~53 min at 287 s) before, 1 (~5 min)
+after**; solomon's own press of that stack paid the same 11 suites and was cut
+at its 50-minute cap with nothing landed. Two consequences: the heavy-slot
+policy is off while a candidate gate is set to stop on (largest-first, a
+candidate's strict subsets are the *smaller* sets the walk has not reached yet,
+so deferring on them starves the walk — it re-runs the same failing suite every
+tick and settles for a smaller set than one that would have passed), and
+`schedulable` walks the same order and breaks at the same predicate.
 
 **Routing on break:** any conflict (after mediate) or gate failure triggers the
 cheap triage model first. `trivial`/`moderate` → wake the capable agent.
