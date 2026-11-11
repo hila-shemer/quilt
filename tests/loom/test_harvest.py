@@ -60,6 +60,29 @@ def test_skips_non_test_commit(repo, db, pool):
     assert len(_range(repo, "main", "feat")) == 1            # commit left on donor
 
 
+def test_an_empty_ladder_lifts_nothing_and_moves_no_ref(repo, db, pool):
+    """Harvest carries its own byte-identical copy of the linearizer's
+    `_fully_green`, so an empty ladder read as *every liftable commit green*
+    here too - and harvest is the half that moves a ref a later run depends on:
+    it rewrites `cfg.base` and the donor branch. Refused before the pool is even
+    built; nothing above the base's own commit is touched."""
+    c = gates.Config(base="main", branches=[], gates=[], targets={})
+    repo.branch("feat")
+    repo.commit_file("tests/test_x.py", "def test_x(): pass\n")
+    repo.git("checkout", "-q", "main")
+    base_before = gitio.rev(repo.path, "main")
+    donor_before = gitio.rev(repo.path, "feat")
+
+    with pytest.raises(gates.ConfigError) as ei:
+        harvest.run(repo.path, db, c, "feat", TEST_GLOBS, pool)
+
+    assert str(ei.value) == ("quilt.toml: the [gate] ladder is empty - "
+                             "loom will not publish an unverified series")
+    assert gitio.rev(repo.path, "main") == base_before       # base not rewritten
+    assert gitio.rev(repo.path, "feat") == donor_before      # donor not rebased
+    assert "tests/test_x.py" not in _tree_paths(repo, "main")
+
+
 def test_test_only_red_on_base_is_queued_not_lifted(repo, db, pool):
     # ladder fails whenever the test file is present → red on base.
     c = cfg(cand_cmd="! test -f tests/test_x.py")
