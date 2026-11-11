@@ -157,6 +157,57 @@ def test_commit_interleave_irreducible_for_single_commit_cycle(repo, db):
     assert linearize._commit_interleave(repo.path, [x, y], {"x", "y"}, edges) is None
 
 
+def _make_range_inc(repo, db, id, n, at="main"):
+    """An increment whose payload is a real multi-commit range (`inc.base` set) —
+    the finest granularity `_inc_commits` can produce, and so the best case the
+    commit-level solver could hope for."""
+    repo.git("checkout", "-q", "-b", f"b-{id}-r", at)
+    for i in range(n):
+        repo.commit_file(f"{id}{i}.txt", f"{id}{i}\n", f"{id} {i}")
+    head = repo.git("rev-parse", "HEAD")
+    base = repo.git("rev-parse", f"HEAD~{n}")
+    repo.git("checkout", "-q", "main")
+    inc = Increment(id=id, priority_class="feature", patches={"self": head},
+                    base=base, age=next(_age))
+    increments.add(db, inc)
+    return inc
+
+
+def test_commit_interleave_is_never_the_answer_to_a_cycle(repo, db):
+    """Claim 2, pinned: the commit-level solver has no real caller, because for
+    every increment-level cycle it is handed it returns None — `_solve_commits`
+    is reachable only through `_handle_cycle`, and only when this does not.
+
+    It is structural, not a gap in the code: an edge (X -> Y) expands here to
+    *every* commit of Y preceding *every* commit of X, so contracting each
+    increment's commit nodes back into one node recovers the increment graph
+    exactly. An SCC there is therefore an SCC here — every commit of X has a
+    path down to every commit of Y and back — so no amount of commit
+    granularity can order it.
+
+    The enumeration is the evidence: three increments (two carrying two commits,
+    one carrying one), every non-empty subset of the six directed edges, and
+    every subset `order()` calls a cycle. Measured: 63 subsets, 39 cycles, 0
+    answers."""
+    incs = [_make_range_inc(repo, db, "a", 2), _make_range_inc(repo, db, "b", 2),
+            _make_range_inc(repo, db, "c", 1)]
+    ids = ["a", "b", "c"]
+    pairs = [(x, y) for x in ids for y in ids if x != y]
+    cycled = redressed = 0
+    for k in range(1, len(pairs) + 1):
+        for combo in itertools.combinations(pairs, k):
+            edges = [{"x": x, "y": y} for x, y in combo]
+            try:
+                increments.order(incs, edges)
+                continue                      # acyclic here: not this path
+            except increments.CycleError as ce:
+                cycled += 1
+                if linearize._commit_interleave(repo.path, incs, ce.remaining,
+                                                edges) is not None:
+                    redressed += 1
+    assert (cycled, redressed) == (39, 0)
+
+
 def test_solve_commits_materializes_in_order(repo, db, pool):
     # the reducible-path materializer, exercised directly on a valid acyclic order
     a = make_inc(repo, db, "a", "a.txt", "A\n")
