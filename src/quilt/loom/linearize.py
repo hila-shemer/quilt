@@ -14,7 +14,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .. import gitio
+from .. import gates as gates_mod, gitio
 from . import commitcache, decide, epoch as epoch_mod, increments
 from .worktree import WorktreePool
 
@@ -48,6 +48,31 @@ def _cherry_pick(wt: Path, commit: str) -> bool:
     return True
 
 
+def _require_ladder(cfg) -> None:
+    """Refuse an empty gate ladder by name, before anything moves.
+
+    An absent `[gate]` table is a legal `quilt.toml` — `load_config` reads it as
+    `raw.get("gate", [])` — so the empty ladder is a state a real config reaches,
+    and one the linearizer read as *every increment green*: `run_ladder_on_commit`
+    over no gates returns None, and `_fully_green` compares that against
+    `cfg.gates[-1]["name"] if cfg.gates else None`, so the two Nones matched and
+    the whole series was published to `refs/loom/staging` with nothing run over
+    it. A ladder is what says a commit is green; with none, no answer about a
+    commit's health exists, and "no answer" must not read as "all green".
+
+    The two callers below are the materializers, and both are guarded here rather
+    than at the gate call: this raises before the first cherry-pick and before
+    the staging ref is written, which is the last point at which refusing costs
+    nothing (`candidate.advance` refuses `[promotion]`'s keys for the same
+    reason). The rest of quilt already treats an empty ladder as fail-safe —
+    `gates.ready_targets` promotes nothing and `run_ladder` returns None — so
+    this changes the loom half only."""
+    if not cfg.gates:
+        raise gates_mod.ConfigError(
+            "quilt.toml: the [gate] ladder is empty - "
+            "loom will not publish an unverified series")
+
+
 def _fully_green(cfg, highest: str | None) -> bool:
     last = cfg.gates[-1]["name"] if cfg.gates else None
     return highest == last
@@ -56,6 +81,7 @@ def _fully_green(cfg, highest: str | None) -> bool:
 def solve(repo: Path, db, cfg, incs: list, pool: WorktreePool | None = None) -> Solution:
     """Materialize `incs` in dependency+policy order; publish the maximal green
     prefix to refs/loom/staging; park the seam and everything after it."""
+    _require_ladder(cfg)
     pool = pool or WorktreePool(repo, size=4)
     edges = increments.list_dep_edges(db)
     ordered = increments.order(incs, edges)
@@ -177,6 +203,7 @@ def _solve_commits(repo: Path, db, cfg, commit_order: list[str],
                    pool: WorktreePool) -> Solution:
     """Materialize a commit-granular order (the reducible-cycle path): cherry-pick
     each commit onto the running tip, gate it, publish the maximal green prefix."""
+    _require_ladder(cfg)
     sol = Solution(order=list(commit_order))
     base_sha = gitio.rev(repo, cfg.base)
     gitio.update_ref(repo, STAGING_REF, base_sha)

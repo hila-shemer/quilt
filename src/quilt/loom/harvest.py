@@ -38,6 +38,11 @@ def run(repo: Path, db, cfg, branch: str, test_globs=DEFAULT_TEST_GLOBS,
         pool: WorktreePool | None = None) -> list[str]:
     """Harvest test-only liftable commits from *branch* onto `cfg.base`. Returns
     the lifted base commit shas (post-lift identities)."""
+    # The same refusal the linearizer makes, for the same vacuous green: this
+    # module carries its own copy of `_fully_green` below, and an empty ladder
+    # read as every liftable commit green — which here is worse than a staging
+    # ref, because a lift rewrites `cfg.base` itself and the donor branch.
+    linearize._require_ladder(cfg)
     pool = pool or WorktreePool(repo, size=2)
     base_sha = gitio.rev(repo, cfg.base)
     candidates = _rev_list(repo, f"{base_sha}..{branch}")

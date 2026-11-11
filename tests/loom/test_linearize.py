@@ -47,6 +47,25 @@ def test_all_clean_full_series(repo, db, pool):
     assert gitio.read_ref(repo.path, linearize.STAGING_REF) == sol.commit_of("b")
 
 
+def test_an_empty_ladder_is_refused_not_vacuously_green(repo, db, pool):
+    """No [gate] table is a legal quilt.toml - `load_config` reads
+    `raw.get("gate", [])` - and the linearizer read that empty ladder as *every
+    increment green*: `_fully_green` compares against `cfg.gates[-1]["name"] if
+    cfg.gates else None`, and `run_ladder_on_commit` over no gates returns None,
+    so the two Nones matched and the whole series was published to
+    refs/loom/staging with nothing run over it. Refused by name instead, before
+    anything moves - the staging ref and every increment's status are untouched
+    when the refusal raises."""
+    c = gates.Config(base="main", branches=[], gates=[], targets={})
+    a = make_inc(repo, db, "a", "a.txt", "A\n")
+    with pytest.raises(gates.ConfigError) as ei:
+        linearize.solve(repo.path, db, c, [a], pool)
+    assert str(ei.value) == ("quilt.toml: the [gate] ladder is empty - "
+                             "loom will not publish an unverified series")
+    assert gitio.read_ref(repo.path, linearize.STAGING_REF) is None
+    assert increments.get(db, "a").status == "building"    # never marked green
+
+
 def test_maximal_green_prefix_truncates(repo, db, pool):
     # gate fails iff bad.txt is present; b introduces it.
     c = cfg([{"name": "build", "test": False, "cmd": "! test -f bad.txt"}])
