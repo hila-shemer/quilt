@@ -4,7 +4,7 @@ context:
 - /home/hila/proj/manager-rightwaygo/quilt-wt/loom-empty-gate (this worktree, branch `fix/loom-empty-gate`)
 - /home/hila/cc-cmds/quilt-loom-empty-gate.{sh,check,bg.sh,why,reject}
 - /home/hila/cc-cmds/quilt-loom-empty-gate.report.md (the review page's source md)
-- alexandria:2026-11-11-quilt-loom-refuses-an-empty-gate-ladder-instead-of-calling-it-g
+- alexandria:2026-11-11-quilt-loom-refuses-an-empty-gate-ladder-instead-of-calling-i
 - /home/hila/proj/manager-rightwaygo/rightwaygo-wt/slice14-linearize/internal/loomlinearize/loomlinearize.go
 - /home/hila/.claude/claude-control/results/20261111-000553-quilt-PerkyViper.md
 
